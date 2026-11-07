@@ -9,11 +9,13 @@
   try { stored = localStorage.getItem(KEY); } catch (e) { /* storage blocked: follow the system */ }
   if (stored === "light" || stored === "dark") root.dataset.theme = stored;
 
+  const MOON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.6A8.2 8.2 0 1 1 9.4 4a6.6 6.6 0 0 0 10.6 10.6z"/></svg>';
+  const SUN = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M5.3 18.7l1.6-1.6M17.1 6.9l1.6-1.6"/></svg>';
   const current = () => root.dataset.theme || (dark.matches ? "dark" : "light");
 
   function paint(btn) {
     const isDark = current() === "dark";
-    btn.textContent = isDark ? "☀︎" : "☾";
+    btn.innerHTML = isDark ? SUN : MOON;
     btn.title = isDark ? "换成浅色" : "换成深色";
   }
 

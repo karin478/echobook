@@ -302,7 +302,8 @@ body.reader { font: var(--read-size)/var(--read-lh) var(--read-font, var(--serif
   background: color-mix(in srgb, var(--bg) 86%, transparent); backdrop-filter: saturate(1.4) blur(10px);
   border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
 }
-.r-top .in { max-width: 760px; margin: 0 auto; height: 48px; padding: 0 20px; display: flex; align-items: center; gap: 16px; }
+.r-top .in { max-width: var(--read-width); margin: 0 auto; height: 48px; padding: 0 20px; display: flex; align-items: center; gap: 16px; }
+.r-top .typo + .theme-btn { margin-left: -12px; } /* the two icon buttons sit together */
 .r-top .back { margin: 0; flex: none; }
 .r-top .book-name {
   flex: 1; min-width: 0; text-align: center; color: var(--muted); white-space: nowrap; overflow: hidden;
@@ -496,18 +497,16 @@ body.drilling #text w.on { background: none; text-decoration: underline 2px; tex
 
 /* ---- 浅色 / 深色 toggle (theme.js) ---- */
 .theme-btn {
-  flex: none; width: 30px; height: 30px; padding: 0; border-radius: 50%; cursor: pointer;
-  border: 1px solid var(--btn-line); background: var(--btn); color: var(--muted); font-size: 15px; line-height: 1;
+  flex: none; width: 32px; height: 32px; padding: 0; display: inline-grid; place-items: center; cursor: pointer;
+  border: 0; border-radius: 8px; background: transparent; color: var(--muted);
 }
-.theme-btn:hover { color: var(--fg); background: var(--btn-hover); }
+.theme-btn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.theme-btn:hover, .theme-btn[aria-expanded="true"] { color: var(--fg); background: var(--btn-hover); }
 .page-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 22px; }
 .page-top .back { margin-bottom: 0; }
 
 /* ---- 阅读设置 (Aa) panel ---- */
 .typo { position: relative; flex: none; }
-.typo-btn { display: inline-flex; align-items: baseline; justify-content: center; gap: 0; font-family: var(--serif); }
-.typo-btn .a-s { font-size: 11px; }
-.typo-btn .a-l { font-size: 16px; }
 .typo-pop {
   position: absolute; right: 0; top: calc(100% + 8px); z-index: 30; width: 300px; padding: 14px;
   display: grid; gap: 10px; border: 1px solid var(--line); border-radius: 14px; background: var(--card);

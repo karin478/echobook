@@ -79,7 +79,7 @@
     btn.setAttribute("aria-label", "阅读设置");
     btn.setAttribute("aria-haspopup", "dialog");
     btn.title = "阅读设置：字号 / 字体 / 行距 / 宽度";
-    btn.innerHTML = '<span class="a-s">A</span><span class="a-l">A</span>';
+    btn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 19 8 5l5.5 14M4.6 14h6.8M14 19l3.5-8.5L21 19m-5.6-3h4.2"/></svg>';
 
     panel = document.createElement("div");
     panel.className = "typo-pop";
