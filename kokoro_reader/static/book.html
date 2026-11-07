@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Echobook</title>
 <link rel="icon" href="icon.svg?v=1" type="image/svg+xml">
-<link rel="stylesheet" href="css/app.css?v=16">
-<script src="js/theme.js?v=16"></script>
+<link rel="stylesheet" href="css/app.css?v=22">
+<script src="js/theme.js?v=22"></script>
 </head>
 <body>
 <main class="wrap book-page">
@@ -20,13 +20,11 @@
         <div class="book-meta" id="meta"></div>
         <div class="actions">
           <a class="btn primary" id="continue" href="#">▶ 开始阅读</a>
-          <button class="btn prep-btn" id="prepare" type="button" title="给所有正文章节生成朗读音频和逐句中文，后台一章一章做">准备整本书</button>
+          <button class="btn" id="prepare" type="button" title="给所有正文章节生成朗读音频和逐句中文，后台一章一章做（打开阅读页也会自动准备本章和下一章；换音色只影响之后准备的章节）">准备整本书</button>
           <span class="spacer"></span>
-          <label class="voice-pick" title="这本书的朗读音色">
-            <span class="lbl">音色</span>
-            <select class="btn" id="voice" aria-label="音色"></select>
-          </label>
-          <button class="btn ghost" id="preview" type="button">🔈 试听</button>
+          <button class="btn voice-btn" id="voice" type="button" aria-haspopup="dialog" title="这本书的朗读音色：点开逐个试听再选">
+            <span class="lbl">音色</span><span class="nm" id="voice-name"></span>
+          </button>
         </div>
         <div class="prep-est" id="prep-est" title="按这台电脑最近的实际转换速度估算（中文翻译同时在做，通常更快）"></div>
         <div class="prep" id="prep" hidden>
@@ -34,7 +32,6 @@
           <div class="prep-row"><span class="k">中文</span><span class="bar"><i id="prep-zh"></i></span><span class="v" id="prep-zh-n"></span></div>
           <div class="prep-eta" id="prep-eta"></div>
         </div>
-        <p class="hint">「准备」= 这一章的朗读音频 + 逐句中文（打开阅读页也会自动准备本章和下一章）；「准备整本书」= 所有正文章节。换音色只影响之后准备的章节。</p>
       </div>
     </section>
 
@@ -47,7 +44,18 @@
   </div>
 </main>
 
-<script src="js/api.js?v=16"></script>
-<script src="js/book.js?v=16"></script>
+<dialog id="voice-dlg" class="voice-dlg" aria-labelledby="voice-dlg-title">
+  <h2 class="del-title" id="voice-dlg-title">选音色</h2>
+  <p class="voice-tip">点一下就试听，再点一下停；选好按「确定」。换音色只影响之后准备的章节。</p>
+  <div class="voice-body" id="voice-body"></div>
+  <div class="voice-foot">
+    <span class="voice-cur" id="voice-cur"></span>
+    <button class="btn" type="button" id="voice-cancel">取消</button>
+    <button class="btn primary" type="button" id="voice-ok">确定</button>
+  </div>
+</dialog>
+
+<script src="js/api.js?v=22"></script>
+<script src="js/book.js?v=22"></script>
 </body>
 </html>

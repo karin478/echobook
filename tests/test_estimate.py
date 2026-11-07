@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from kokoro_reader.estimate import AUDIO_CPS, CONV_CPS, SpeedLog, eta_by_book
+from kokoro_reader.estimate import AUDIO_CPS, CONV_CPS, EDGE_AUDIO_CPS, EDGE_CONV_CPS, SpeedLog, eta_by_book
 
 
 def test_defaults_until_something_was_measured(tmp_path):
@@ -51,3 +51,37 @@ def test_eta_by_book_walks_the_queue_in_order():
     # a: 5 s left of ch0, 20 s ch1, (b waits 5 s), 10 s ch2 → a done after 40 s; b after 30 s
     assert eta == {"a": pytest.approx(40), "b": pytest.approx(30)}
     assert eta_by_book({"current": None, "pending": []}, lambda b, i: 0, 100) == {}
+
+
+def test_each_engine_keeps_its_own_rates(tmp_path):
+    """Microsoft voices (edge-tts, online) convert ~10x faster than Kokoro: never average the two."""
+    p = tmp_path / "speed.json"
+    log = SpeedLog(p)
+    log.record(chars=1000, seconds=10, audio_seconds=50)                      # Kokoro (the default)
+    log.record(chars=10_000, seconds=10, audio_seconds=600, engine="edge")
+    k, e = SpeedLog(p).rates(), SpeedLog(p).rates("edge")
+    assert k["conv_cps"] == pytest.approx(100) and k["measured"] == 1
+    assert e["conv_cps"] == pytest.approx(1000) and e["audio_cps"] == pytest.approx(10_000 / 600)
+    assert e["measured"] == 1
+    assert SpeedLog(p).rates("kokoro") == k
+
+
+def test_edge_has_its_own_defaults(tmp_path):
+    r = SpeedLog(tmp_path / "speed.json").rates("edge")
+    assert (r["conv_cps"], r["audio_cps"], r["measured"]) == (EDGE_CONV_CPS, EDGE_AUDIO_CPS, 0)
+    assert EDGE_CONV_CPS > 5 * CONV_CPS
+
+
+def test_the_last_runs_are_kept_per_engine(tmp_path):
+    log = SpeedLog(tmp_path / "speed.json", keep=2)
+    for _ in range(2):
+        log.record(chars=100, seconds=10, audio_seconds=5)
+    for _ in range(3):
+        log.record(chars=1000, seconds=1, audio_seconds=60, engine="edge")
+    assert log.rates()["measured"] == 2 and log.rates("edge")["measured"] == 2
+
+
+def test_eta_by_book_uses_each_books_own_rate():
+    snap = {"current": None, "pending": [["k", 0], ["e", 0]]}
+    eta = eta_by_book(snap, lambda b, i: 1000, conv_cps=lambda b: 100 if b == "k" else 1000)
+    assert eta == {"k": pytest.approx(10), "e": pytest.approx(11)}

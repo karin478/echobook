@@ -14,11 +14,18 @@ from .config import MP3_BITRATE
 
 CONV_CPS = 85.0    # characters converted per second of work (Kokoro on an Apple GPU)
 AUDIO_CPS = 17.5   # characters read per second of audio (af_heart at normal speed)
-KEEP = 30          # the last N chapters count: the machine (or its load) may change
+EDGE_CONV_CPS = 1000.0  # Microsoft voices via edge-tts (online, 8 paragraphs at once): ~15 s per 17k-char chapter
+EDGE_AUDIO_CPS = 15.7   # Microsoft voices read a little slower than af_heart
+KEEP = 30          # the last N chapters per engine count: the machine (or its load) may change
+_DEFAULTS = {"kokoro": (CONV_CPS, AUDIO_CPS), "edge": (EDGE_CONV_CPS, EDGE_AUDIO_CPS)}
 
 
 def _audio_bytes_per_sec() -> int:
     return int(MP3_BITRATE.rstrip("k")) * 1000 // 8
+
+
+def _engine(run: dict) -> str:
+    return run.get("engine") or "kokoro"  # runs logged before engines existed were all Kokoro
 
 
 class SpeedLog:
@@ -34,38 +41,46 @@ class SpeedLog:
         except (OSError, ValueError):
             return []
 
-    def record(self, chars: int, seconds: float, audio_seconds: float) -> None:
+    def record(self, chars: int, seconds: float, audio_seconds: float, engine: str = "kokoro") -> None:
         if chars <= 0 or seconds <= 0 or audio_seconds <= 0:
             return  # an empty or instant chapter says nothing about speed
         with self._lock:
-            runs = (self._load() + [{"chars": chars, "seconds": seconds, "audio": audio_seconds}])[-self.keep:]
+            runs = self._load() + [{"chars": chars, "seconds": seconds, "audio": audio_seconds, "engine": engine}]
+            mine = [i for i, r in enumerate(runs) if _engine(r) == engine]
+            drop = set(mine[:-self.keep])  # keep the last N of this engine; other engines untouched
+            runs = [r for i, r in enumerate(runs) if i not in drop]
             tmp = self.path.with_name(self.path.name + ".tmp")
             tmp.write_text(json.dumps(runs))
             tmp.replace(self.path)
 
-    def rates(self) -> dict:
-        runs = self._load()
+    def rates(self, engine: str = "kokoro") -> dict:
+        runs = [r for r in self._load() if _engine(r) == engine]
+        conv_default, audio_default = _DEFAULTS.get(engine, _DEFAULTS["kokoro"])
         chars = sum(r.get("chars", 0) for r in runs)
         secs = sum(r.get("seconds", 0) for r in runs)
         audio = sum(r.get("audio", 0) for r in runs)
         ok = chars > 0 and secs > 0 and audio > 0
         return {
-            "conv_cps": chars / secs if ok else CONV_CPS,
-            "audio_cps": chars / audio if ok else AUDIO_CPS,
+            "conv_cps": chars / secs if ok else conv_default,
+            "audio_cps": chars / audio if ok else audio_default,
             "audio_bytes_per_sec": _audio_bytes_per_sec(),
             "measured": len(runs) if ok else 0,
         }
 
 
-def eta_by_book(snapshot: dict, chars_of, conv_cps: float) -> dict[str, float]:
-    """Seconds until each book's last queued chapter is done, walking the queue in order."""
+def eta_by_book(snapshot: dict, chars_of, conv_cps) -> dict[str, float]:
+    """Seconds until each book's last queued chapter is done, walking the queue in order.
+
+    `conv_cps` is one rate for every book, or a function book_id -> rate (books differ by engine).
+    """
+    rate = conv_cps if callable(conv_cps) else (lambda _book_id: conv_cps)
     t = 0.0
     eta: dict[str, float] = {}
     cur = snapshot.get("current")
     if cur:
-        t += chars_of(cur["book_id"], cur["idx"]) * (1 - float(cur.get("progress") or 0)) / conv_cps
+        t += chars_of(cur["book_id"], cur["idx"]) * (1 - float(cur.get("progress") or 0)) / rate(cur["book_id"])
         eta[cur["book_id"]] = t
     for book_id, idx in snapshot.get("pending", []):
-        t += chars_of(book_id, idx) / conv_cps
+        t += chars_of(book_id, idx) / rate(book_id)
         eta[book_id] = t
     return eta

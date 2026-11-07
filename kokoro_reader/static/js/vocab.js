@@ -34,6 +34,19 @@ function chapterLabel(rec) {
   return `Ch ${Number(rec.chapter) + 1}`;
 }
 
+const ICON_PLAY = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path class="wave" d="M15.5 8.8a4.5 4.5 0 0 1 0 6.4M18 6.5a8 8 0 0 1 0 11"/></svg>';
+const ICON_STOP = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg>';
+
+/** A 讲解 folds under its tag (it is long; open it when reviewing); a 翻译 is one line and stays open. */
+function glossBlock(rec) {
+  if (!rec.gloss) return "";
+  if (rec.gloss_mode !== "explain") {
+    return `<div class="gloss" lang="zh-CN"><span class="g-tag">翻译</span>${glossHtml(rec.gloss)}</div>`;
+  }
+  return `<div class="gloss folded" lang="zh-CN"><button class="g-tag" type="button" data-action="fold" aria-expanded="false">讲解</button>` +
+    `<div class="g-fold" hidden>${glossHtml(rec.gloss)}</div></div>`;
+}
+
 function itemHtml(rec) {
   return `<article class="vocab-item" data-id="${escapeHtml(rec.id)}">` +
     `<div class="v-main">` +
@@ -41,13 +54,13 @@ function itemHtml(rec) {
       ? `<div class="kind">收藏句子</div><p class="sentence whole">${escapeHtml(rec.sentence)}</p>`
       : `<div class="word">${escapeHtml(rec.text)}</div><p class="sentence">${sentenceHtml(rec)}</p>`) +
     (rec.zh ? `<p class="zh" lang="zh-CN">${escapeHtml(rec.zh)}</p>` : "") +
-    (rec.gloss ? `<div class="gloss" lang="zh-CN"><span class="g-tag">${rec.gloss_mode === "explain" ? "讲解" : "翻译"}</span>${glossHtml(rec.gloss)}</div>` : "") +
+    glossBlock(rec) +
     `<div class="v-meta"><span class="src">${escapeHtml(rec.book_title)} · ${chapterLabel(rec)}</span>` +
     `<span class="dot">·</span><span class="when">${fmtWhen(rec.created_at)}</span></div>` +
     `</div><div class="v-ops">` +
-    (rec.sentence_clip ? `<button class="btn small" type="button" data-action="play" aria-label="🔈" title="播放句子片段">🔈</button>` : "") +
     ankiBtn(rec) +
-    `<button class="btn small ghost" type="button" data-action="delete">删除</button>` +
+    `<button class="btn small ghost hover-only" type="button" data-action="delete">删除</button>` +
+    (rec.sentence_clip ? `<button class="icon-btn play-clip" type="button" data-action="play" aria-label="播放句子" title="播放这句的音频">${ICON_PLAY}</button>` : "") +
     `</div></article>`;
 }
 
@@ -60,7 +73,7 @@ function updateCount() {
 function resetPlaying() {
   if (playingId) {
     const b = els.list.querySelector(`.vocab-item[data-id="${playingId}"] [data-action="play"]`);
-    if (b) b.textContent = "🔈";
+    if (b) { b.innerHTML = ICON_PLAY; b.setAttribute("aria-label", "播放句子"); b.classList.remove("on"); }
   }
   playingId = null;
 }
@@ -83,12 +96,21 @@ els.list.addEventListener("click", async (e) => {
   if (!btn) return;
   const item = btn.closest(".vocab-item");
   const id = item.dataset.id;
+  if (btn.dataset.action === "fold") {
+    const open = btn.getAttribute("aria-expanded") !== "true";
+    btn.setAttribute("aria-expanded", String(open));
+    btn.nextElementSibling.hidden = !open;
+    btn.parentElement.classList.toggle("folded", !open);
+    return;
+  }
   if (btn.dataset.action === "play") {
     const same = playingId === id;
     stopAudio();
     if (same) return;
     playingId = id;
-    btn.textContent = "⏹";
+    btn.innerHTML = ICON_STOP;
+    btn.setAttribute("aria-label", "停止");
+    btn.classList.add("on");
     audio.src = `/api/vocab/${id}/clip.mp3`;
     audio.play().catch(() => {});
   } else if (btn.dataset.action === "delete") {
@@ -115,14 +137,14 @@ const anki = { ok: false, error: "", config: null, decks: [], models: [], editin
 const ankiBar = $("anki-bar");
 
 function ankiBtn(rec) {
-  if (rec.anki_note_id) return `<button class="btn small" type="button" data-action="anki" disabled>已在 Anki</button>`;
+  if (rec.anki_note_id) return `<span class="anki-done" data-action-slot="anki" title="这条已经推到 Anki">已在 Anki</span>`;
   const off = !anki.ok || !anki.config || anki.busy;
-  return `<button class="btn small" type="button" data-action="anki"${off ? " disabled" : ""}>推到 Anki</button>`;
+  return `<button class="btn small hover-only" type="button" data-action="anki" data-action-slot="anki"${off ? " disabled" : ""}>推到 Anki</button>`;
 }
 
 function refreshAnkiButtons() {
   for (const item of els.list.querySelectorAll(".vocab-item")) {
-    const rec = recs.get(item.dataset.id), b = item.querySelector('[data-action="anki"]');
+    const rec = recs.get(item.dataset.id), b = item.querySelector('[data-action-slot="anki"]');
     if (rec && b) b.outerHTML = ankiBtn(rec);
   }
 }

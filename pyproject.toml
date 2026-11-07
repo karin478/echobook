@@ -24,6 +24,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest", "httpx", "pytest-playwright"]
+# Microsoft Natural voices (opt-in, also needs KOKORO_READER_EDGE=1); older versions get 403 from the service
+edge = ["edge-tts>=7.3.1"]
 
 [tool.setuptools]
 packages = ["kokoro_reader"]

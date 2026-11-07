@@ -16,6 +16,17 @@ def open_book(page: Page, live_server, book_id: str):
     expect(page.locator("h1")).to_have_text("The Sample Book")
 
 
+def open_voices(page: Page):
+    page.locator("#voice").click()
+    dlg = page.get_by_role("dialog", name="选音色")
+    expect(dlg).to_be_visible()
+    return dlg
+
+
+def voice_opt(dlg, name: str):
+    return dlg.get_by_role("button", name=re.compile(f"^{name}\\b"))
+
+
 def row(page: Page, num: int):
     return page.locator(f'.chapter-row[data-num="{num}"]')
 
@@ -58,8 +69,7 @@ def test_book_prepare_one_makes_audio_and_chinese(page: Page, live_server, book)
     r = row(page, 2)
     r.get_by_role("button", name="准备", exact=True).click()  # one trigger: audio + Chinese
     expect(r.locator(".tag")).to_have_text("已准备", timeout=15000)
-    expect(r.locator(".zh")).to_have_text("中文", timeout=15000)
-    expect(r.get_by_role("link", name="▶ 读")).to_have_attribute("href", f"reader.html?book={book}&ch=2")
+    expect(r.locator(".ttl a")).to_have_attribute("href", f"reader.html?book={book}&ch=2")
     expect(r.locator(".dur")).not_to_have_text("")
     expect(r.get_by_role("button", name="准备", exact=True)).to_have_count(0)
     # only that chapter was prepared
@@ -71,16 +81,13 @@ def test_book_prepare_one_makes_audio_and_chinese(page: Page, live_server, book)
 @pytest.mark.parametrize("live_server_env", [{"KOKORO_READER_FAKE_TRANSLATE": "1"}])
 def test_prepare_whole_book_makes_audio_and_chinese(page: Page, live_server, book):
     open_book(page, live_server, book)
-    expect(row(page, 1).locator(".zh")).to_have_text("")
     page.get_by_role("button", name="准备整本书").click()
     expect(page.locator(".toast")).to_contain_text("5 章音频")
     for n in range(1, 6):
         expect(row(page, n).locator(".tag")).to_have_text("已准备", timeout=20000)
-        expect(row(page, n).locator(".zh")).to_have_text("中文", timeout=20000)
     expect(page.locator(".book-meta")).to_contain_text("中文 5/5")
     page.locator(".matter-toggle").click()
     expect(page.locator(".chapter-row.matter .tag")).to_have_text("未准备")
-    expect(page.locator(".chapter-row.matter .zh")).to_have_text("")
 
 
 def test_book_voice_change_shows_reconvert(page: Page, live_server, book):
@@ -89,17 +96,35 @@ def test_book_voice_change_shows_reconvert(page: Page, live_server, book):
     open_book(page, live_server, book)
     expect(row(page, 1).locator(".tag")).to_have_text("已准备", timeout=15000)
 
-    select = page.locator("#voice")
-    expect(select).to_have_value("af_heart")
-    for group in ("美式女声", "美式男声", "英式女声", "英式男声"):
-        expect(select.locator(f'optgroup[label="{group}"]')).to_have_count(1)
-    expect(page.get_by_role("button", name="🔈 试听")).to_be_visible()
-
+    picker = page.locator("#voice")
+    expect(picker).to_contain_text("Heart")
     r1 = row(page, 1)
-    expect(r1.get_by_role("link", name="▶ 读")).to_be_visible()
+    expect(r1.locator(".ttl a")).to_be_visible()
     expect(r1.get_by_role("button", name="用新音色重录")).to_have_count(0)
 
-    select.select_option("bm_george")
+    dlg = open_voices(page)
+    for group in ("美式女声", "美式男声", "英式女声", "英式男声"):
+        expect(dlg.get_by_role("heading", name=group, exact=True)).to_have_count(1)
+    expect(dlg.get_by_role("heading", name=re.compile("^微软"))).to_have_count(0)  # Microsoft voices are opt-in
+    expect(voice_opt(dlg, "Heart")).to_have_attribute("aria-pressed", "true")  # the book's voice
+    # a click plays that voice's 试听 at once; nothing changes until 确定
+    with page.expect_response("**/api/voices/bm_george/preview.mp3") as resp:
+        voice_opt(dlg, "George").click()
+    assert resp.value.ok  # the audio element asks for a range: 206
+    expect(voice_opt(dlg, "George")).to_have_attribute("aria-pressed", "true")
+    expect(voice_opt(dlg, "Heart")).to_have_attribute("aria-pressed", "false")
+    assert live_server.api("GET", f"/api/books/{book}")["voice"] == "af_heart"
+    dlg.get_by_role("button", name="取消").click()
+    expect(dlg).to_be_hidden()
+    expect(picker).to_contain_text("Heart")
+    assert live_server.api("GET", f"/api/books/{book}")["voice"] == "af_heart"
+
+    dlg = open_voices(page)
+    expect(voice_opt(dlg, "Heart")).to_have_attribute("aria-pressed", "true")  # 取消 dropped George
+    voice_opt(dlg, "George").click()
+    dlg.get_by_role("button", name="确定").click()
+    expect(dlg).to_be_hidden()
+    expect(picker).to_contain_text("George")
     expect(r1.get_by_role("button", name="用新音色重录")).to_be_visible()
     assert live_server.api("GET", f"/api/books/{book}")["voice"] == "bm_george"
 
@@ -155,3 +180,45 @@ def test_estimates_before_and_while_preparing(page: Page, live_server, book):
 
     row(page, 1).get_by_role("button", name="准备").click()
     expect(page.locator(".toast")).to_contain_text("预计")
+
+
+
+@pytest.mark.parametrize("live_server_env", [{"KOKORO_READER_EDGE": "1"}])
+def test_book_lists_microsoft_voices_when_switched_on(page: Page, live_server, book):
+    open_book(page, live_server, book)
+    dlg = open_voices(page)
+    for group in ("微软 美式女声", "微软 美式男声", "微软 英式女声", "微软 英式男声"):
+        expect(dlg.get_by_role("heading", name=group, exact=True)).to_have_count(1)
+    expect(voice_opt(dlg, "Ava")).to_have_attribute("data-voice", "en-US-AvaMultilingualNeural")
+
+
+def test_rows_are_quiet_until_you_point_at_them(page: Page, live_server, book):
+    """One status per row (audio + 中文 together, no pills); a row's buttons show on hover; the title
+    is the way into the reader; the header has one accent button and no paragraph of instructions."""
+    open_book(page, live_server, book)
+    r = row(page, 1)
+    expect(page.locator(".chapter-row .zh")).to_have_count(0)
+    expect(page.locator(".book-head .hint")).to_have_count(0)
+    assert page.locator(".book-head .btn.primary:visible").count() == 1
+    tag_bg = r.locator(".tag").evaluate("e => getComputedStyle(e).backgroundColor")
+    assert tag_bg == "rgba(0, 0, 0, 0)"
+    prep = r.get_by_role("button", name="准备", exact=True)
+    page.mouse.move(5, 5)
+    expect(prep).to_have_css("opacity", "0")
+    r.hover()
+    expect(prep).to_have_css("opacity", "1")
+    # an unprepared chapter opens too (text first, the reader prepares it)
+    expect(r.locator(".ttl a")).to_have_attribute("href", f"reader.html?book={book}&ch=1")
+
+
+def test_translation_progress_is_part_of_the_one_status(page: Page, live_server, book):
+    def translating(route):
+        data = route.fetch().json()
+        for c in data["chapters"]:
+            if c["idx"] == 1:
+                c.update(status="done", duration=60.0, zh="running", zh_progress=0.4)
+        route.fulfill(json=data)
+    page.route(f"**/api/books/{book}", translating)
+    open_book(page, live_server, book)
+    expect(row(page, 1).locator(".tag")).to_have_text("翻译 40%")
+    page.unroute(f"**/api/books/{book}")

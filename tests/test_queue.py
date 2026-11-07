@@ -511,4 +511,16 @@ def test_each_conversion_is_timed_for_the_estimates(env):
     assert q.run_once()
     ch = store.list_chapters(bid)[0]
     (run,) = json.loads((lib.home / "speed.json").read_text())
-    assert run == {"chars": ch["chars"], "seconds": 30.0, "audio": pytest.approx(ch["duration"])}
+    assert run == {"chars": ch["chars"], "seconds": 30.0, "audio": pytest.approx(ch["duration"]), "engine": "kokoro"}
+
+
+def test_conversion_speed_is_recorded_per_engine(env):
+    from kokoro_reader.estimate import SpeedLog
+    store, lib, bid = env
+    store.set_book_voice(bid, "en-US-AriaNeural")  # a Microsoft (edge-tts) voice
+    speed = SpeedLog(lib.home / "speed.json")
+    q = ConversionQueue(store, lib, FakeSynth(), autostart=False, speed=speed, clock=iter([0.0, 2.0]).__next__)
+    q.enqueue(bid, [0], "normal")
+    assert q.run_once()
+    (run,) = json.loads((lib.home / "speed.json").read_text())
+    assert run["engine"] == "edge"

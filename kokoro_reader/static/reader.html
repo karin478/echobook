@@ -5,19 +5,15 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Echobook</title>
 <link rel="icon" href="icon.svg?v=1" type="image/svg+xml">
-<link rel="stylesheet" href="css/app.css?v=16">
-<script src="js/theme.js?v=16"></script>
-<script src="js/reading.js?v=16"></script>
+<link rel="stylesheet" href="css/app.css?v=22">
+<script src="js/theme.js?v=22"></script>
+<script src="js/reading.js?v=22"></script>
 </head>
 <body class="reader drilling">
 <header class="r-top">
   <div class="in">
     <a class="back" id="back" href="shelf.html">← 章节页</a>
     <span class="book-name" id="book-name"></span>
-    <div class="seg" role="group" aria-label="播放方式（S 切换）" title="播放方式（S 切换）">
-      <button type="button" id="mode-cont" aria-pressed="true">连续</button>
-      <button type="button" id="mode-stop" aria-pressed="false">一句一停</button>
-    </div>
     <span class="typo-slot"></span>
     <span class="theme-slot"></span>
   </div>
@@ -55,23 +51,13 @@
 </div>
 
 <div class="dock" id="dock">
-  <div class="zh-card" id="zh-card">
-    <span class="zh-pos" id="zh-pos"></span>
-    <span class="zh-hint" id="zh-hint"></span>
-    <button class="btn small" id="zh-retry" type="button" hidden>重试</button>
-    <button class="chip" id="zh-toggle" type="button" title="显示 / 隐藏中文（↓）" aria-pressed="true">中文<kbd>↓</kbd></button>
-    <div class="seg gloss-seg" role="group" aria-label="划词（T 切换）" title="划选文字后自动给出：翻译 / AI 讲解（T 切换）">
-      <span class="seg-lbl">划词</span>
-      <button type="button" id="gloss-quick" aria-pressed="true">翻译</button>
-      <button type="button" id="gloss-explain" aria-pressed="false">讲解</button>
-    </div>
-  </div>
+  <div class="dock-in">
   <div class="reader-bar" id="bar" hidden>
     <div class="transport">
       <button class="icon-btn" id="prev" type="button" title="上一句（←）" aria-label="上一句">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h2v14H6zM20 5v14L9.5 12z"/></svg>
       </button>
-      <button class="play-btn" id="play" type="button" aria-label="播放">
+      <button class="play-btn" id="play" type="button" aria-label="播放" title="播放 / 暂停（空格）">
         <svg class="i-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
         <svg class="i-pause" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg>
       </button>
@@ -83,17 +69,60 @@
       <input id="prog" type="range" min="0" max="1000" value="0" aria-label="播放进度">
       <span id="time">0:00 / 0:00</span>
     </div>
-    <label class="speed" title="语速（[ 和 ] 键 ±0.05）">
-      <span class="lbl">语速</span>
-      <input id="rate" type="range" min="0.5" max="2" step="0.05" value="1" aria-label="语速">
-      <b id="rate-label">1.00×</b>
-    </label>
+    <div class="pop-wrap">
+      <button class="chip" id="speed-btn" type="button" aria-haspopup="dialog" aria-expanded="false" title="语速（[ 和 ] 键 ±0.05）"><span id="rate-label">1.00×</span></button>
+      <div class="dock-pop speed-pop" id="speed-pop" role="dialog" aria-label="语速" hidden>
+        <div class="presets" id="rate-presets"></div>
+        <input id="rate" type="range" min="0.5" max="2" step="0.05" value="1" aria-label="语速">
+      </div>
+    </div>
   </div>
-  <div class="kbd-hint" id="kbd-hint"></div>
+  <div class="zh-card" id="zh-card">
+    <span class="zh-pos" id="zh-pos"></span>
+    <span class="zh-hint" id="zh-hint"></span>
+    <button class="btn small" id="zh-retry" type="button" hidden>重试</button>
+    <div class="seg" role="group" aria-label="播放方式（S 切换）" title="播放方式（S 切换）">
+      <button type="button" id="mode-cont" aria-pressed="true">连续</button>
+      <button type="button" id="mode-stop" aria-pressed="false" title="本句读完自动从头再读，按 → 才到下一句（S）">单句循环</button>
+    </div>
+    <button class="chip" id="zh-toggle" type="button" title="显示 / 隐藏中文（↓）" aria-pressed="true">中文</button>
+    <div class="pop-wrap">
+      <button class="icon-btn more-btn" id="more-btn" type="button" aria-label="更多" aria-haspopup="dialog" aria-expanded="false" title="更多">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+      </button>
+      <div class="dock-pop more-pop" id="more-pop" role="dialog" aria-label="更多" hidden>
+        <div class="pop-row">
+          <span class="pop-lbl">划词</span>
+          <div class="seg gloss-seg" role="group" aria-label="划词（T 切换）" title="划选文字后自动给出：翻译 / AI 讲解（T 切换）">
+            <button type="button" id="gloss-quick" aria-pressed="true">翻译</button>
+            <button type="button" id="gloss-explain" aria-pressed="false">讲解</button>
+          </div>
+        </div>
+        <button class="pop-item" id="keys-open" type="button">快捷键<kbd>?</kbd></button>
+      </div>
+    </div>
+  </div>
+  </div>
 </div>
+
+<dialog class="keys-dlg" id="keys-dlg" aria-label="快捷键">
+  <h2>快捷键</h2>
+  <dl>
+    <dt><kbd>空格</kbd></dt><dd>播放/暂停</dd>
+    <dt><kbd>←</kbd><kbd>→</kbd></dt><dd>上一句 / 下一句</dd>
+    <dt><kbd>↑</kbd><kbd>R</kbd></dt><dd>从头重听本句</dd>
+    <dt><kbd>↓</kbd></dt><dd>中文 显示/隐藏</dd>
+    <dt><kbd>S</kbd></dt><dd>连续 / 单句循环</dd>
+    <dt><kbd>F</kbd></dt><dd>收藏本句（英文 + 中文），再按取消</dd>
+    <dt><kbd>T</kbd></dt><dd>划词：翻译 / 讲解</dd>
+    <dt><kbd>[</kbd><kbd>]</kbd></dt><dd>语速 −/+ 0.05</dd>
+    <dt><kbd>?</kbd></dt><dd>打开 / 关闭这张表</dd>
+  </dl>
+  <p class="keys-tip">点单词：从那里开始读 · 划选文字：出翻译或讲解</p>
+</dialog>
 <audio id="au" preload="auto"></audio>
 
-<script src="js/api.js?v=16"></script>
-<script src="js/reader.js?v=16"></script>
+<script src="js/api.js?v=22"></script>
+<script src="js/reader.js?v=22"></script>
 </body>
 </html>

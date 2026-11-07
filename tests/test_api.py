@@ -64,6 +64,7 @@ def test_upload_list_reorder_delete(ctx):
     assert [x["id"] for x in books] == [a, b]
     assert set(books[0]) >= {"id", "title", "author", "has_cover", "voice", "total", "converted", "progress"}
     assert books[0]["progress"] is None and books[0]["has_cover"] is False
+    assert books[0]["read_at"] is None
     assert client.put("/api/books/order", json={"ids": [b, a]}).status_code == 200
     assert [x["id"] for x in client.get("/api/books").json()] == [b, a]
     assert client.put("/api/books/order", json={"ids": [a]}).status_code == 400
@@ -173,6 +174,7 @@ def test_progress_roundtrip_updates_read_ratio(ctx, book):
     assert d["progress"] == {"chapter": 2, "para": 1, "word": 3, "time": 12.5}
     assert d["chapters"][2]["read_ratio"] == 0.4
     assert client.get("/api/books").json()[0]["progress"]["chapter"] == 2
+    assert client.get("/api/books").json()[0]["read_at"] > 0  # the shelf's 继续阅读 picks the latest
 
 
 def test_cover_404_without_cover(ctx, book):
@@ -235,7 +237,7 @@ def test_vocab_sentence_favorite_with_chinese(ctx, book):
 def test_voices_and_preview_cached(ctx):
     client, app, _, _ = ctx
     synth = app.state.preview_synth
-    assert client.get("/api/voices").json() == VOICES
+    assert client.get("/api/voices").json() == [v for v in VOICES if v["engine"] == "kokoro"]  # Microsoft: opt-in
     r1 = client.get("/api/voices/af_heart/preview.mp3")
     assert r1.status_code == 200 and r1.content
     assert synth.calls == 1
@@ -491,3 +493,89 @@ def test_book_and_queue_carry_what_the_estimates_need(ctx, book):
     q = client.get("/api/queue").json()
     chars = client.get(f"/api/books/{book}").json()["chapters"][1]["chars"]
     assert q["eta"][book] == pytest.approx(chars / est["conv_cps"])
+
+
+
+def test_estimates_follow_the_books_engine(ctx, book, monkeypatch):
+    from kokoro_reader.estimate import CONV_CPS, EDGE_CONV_CPS
+    monkeypatch.setenv("KOKORO_READER_EDGE", "1")
+    client, app, synth, tmp = ctx
+    assert client.get(f"/api/books/{book}").json()["estimate"]["conv_cps"] == CONV_CPS
+    assert client.put(f"/api/books/{book}/voice", json={"voice": "en-GB-SoniaNeural"}).status_code == 200
+    assert client.get(f"/api/books/{book}").json()["estimate"]["conv_cps"] == EDGE_CONV_CPS
+    client.post(f"/api/books/{book}/convert", json={"mode": "one", "chapter": 1})
+    chars = client.get(f"/api/books/{book}").json()["chapters"][1]["chars"]
+    assert client.get("/api/queue").json()["eta"][book] == pytest.approx(chars / EDGE_CONV_CPS)
+
+
+
+def test_microsoft_voices_only_when_switched_on(ctx, book, monkeypatch):
+    client, app, synth, tmp = ctx
+    ms = "en-GB-SoniaNeural"
+    assert ms not in {v["id"] for v in client.get("/api/voices").json()}
+    assert client.put(f"/api/books/{book}/voice", json={"voice": ms}).status_code == 400
+    assert client.get(f"/api/voices/{ms}/preview.mp3").status_code == 404
+    monkeypatch.setenv("KOKORO_READER_EDGE", "1")
+    assert ms in {v["id"] for v in client.get("/api/voices").json()}
+    assert client.put(f"/api/books/{book}/voice", json={"voice": ms}).status_code == 200
+
+
+# ---- 试听 made ahead: picking a voice plays at once ----
+def _wait(cond, timeout=20.0):
+    import time
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        if cond():
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def test_previews_are_made_ahead_for_every_voice(tmp_path):
+    home, prev = tmp_path / "h", CountingSynth()
+    app = create_app(home, CountingSynth(), start_worker=False, preview_synth=prev, warm_previews=True)
+    ids = [v["id"] for v in VOICES if v["engine"] == "kokoro"]
+    with TestClient(app, base_url=BASE) as c:
+        assert _wait(lambda: all((home / "previews" / f"{i}.mp3").exists() for i in ids))
+        assert prev.calls == len(ids)
+        assert c.get(f"/api/voices/{ids[-1]}/preview.mp3").status_code == 200
+        assert prev.calls == len(ids)  # served from disk, not made again
+
+
+def test_warming_previews_skips_ones_on_disk_and_survives_a_failure(tmp_path):
+    home = tmp_path / "h"
+    (home / "previews").mkdir(parents=True)
+    (home / "previews" / "af_heart.mp3").write_bytes(b"old")
+
+    class Flaky(CountingSynth):
+        def synth_chapter(self, paras, voice, *a, **kw):
+            if voice == "am_adam":
+                raise RuntimeError("boom")
+            return super().synth_chapter(paras, voice, *a, **kw)
+
+    prev = Flaky()
+    app = create_app(home, CountingSynth(), start_worker=False, preview_synth=prev, warm_previews=True)
+    with TestClient(app, base_url=BASE):
+        assert _wait(lambda: (home / "previews" / "bm_lewis.mp3").exists())
+    assert (home / "previews" / "af_heart.mp3").read_bytes() == b"old"
+    assert not (home / "previews" / "am_adam.mp3").exists()
+    assert not list((home / "previews").glob("*.tmp"))
+
+
+def test_listing_voices_fills_in_missing_previews(tmp_path, monkeypatch):
+    home, prev = tmp_path / "h", CountingSynth()
+    app = create_app(home, CountingSynth(), start_worker=False, preview_synth=prev, warm_previews=True)
+    with TestClient(app, base_url=BASE) as c:
+        target = home / "previews" / "bf_emma.mp3"
+        assert _wait(target.exists)
+        assert _wait(lambda: not app.state.previews_warming())
+        target.unlink()  # e.g. a voice that just became available (Microsoft switched on)
+        c.get("/api/voices")
+        assert _wait(target.exists)
+
+
+def test_no_previews_made_ahead_unless_asked(ctx):
+    client, app, _, tmp = ctx
+    import time
+    time.sleep(0.3)
+    assert app.state.preview_synth.calls == 0

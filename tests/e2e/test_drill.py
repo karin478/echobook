@@ -1,5 +1,6 @@
 """逐句 is the only reading mode: one sentence unit highlighted, its Chinese under it (↓ toggles,
-sticky). Playback is 连续 (follows the audio sentence by sentence) or 一句一停 (stops at each unit end)."""
+sticky). Playback is 连续 (follows the audio sentence by sentence) or 单句循环 (the current unit
+plays again and again, a short breath between, until you move on)."""
 
 import pytest
 from playwright.sync_api import Page, expect
@@ -18,8 +19,21 @@ def ready(page: Page):
 
 
 def stop_mode(page: Page):
-    page.get_by_role("button", name="一句一停").click()
-    expect(page.get_by_role("button", name="一句一停")).to_have_attribute("aria-pressed", "true")
+    page.get_by_role("button", name="单句循环").click()
+    expect(page.get_by_role("button", name="单句循环")).to_have_attribute("aria-pressed", "true")
+
+
+# every playhead position seen, so a test can tell "went back to the start" from "stopped"
+WATCH = """{ window.seen = []; const a = document.getElementById('au');
+    a.addEventListener('timeupdate', () => window.seen.push(a.currentTime)); }"""
+
+
+def looped_back(page: Page, start: float, end: float, timeout=10000):
+    """The unit [start, end] played to its end, then started again from its start."""
+    page.wait_for_function(f"window.seen.some(t => t >= {end - 0.2})", timeout=timeout)
+    page.wait_for_function(f"""(() => {{ const au = document.getElementById('au'), s = window.seen;
+        const i = s.findIndex(t => t >= {end - 0.2});
+        return !au.paused && s.slice(i).some(t => t < {start + 0.5}); }})()""", timeout=timeout)
 
 
 def test_sentence_mode_is_default_with_chinese_and_sticky_toggle(page: Page, live_server, book):
@@ -66,36 +80,47 @@ def test_continuous_follows_the_audio_and_arrows_keep_playing(page: Page, live_s
     assert page.evaluate("document.getElementById('au').paused") is False
 
 
-def test_stop_mode_plays_only_the_current_unit(page: Page, live_server, book):
+def test_loop_mode_replays_the_current_unit_until_you_move_on(page: Page, live_server, book):
     convert(live_server, book, 0)
     toks = chapter(live_server, book, 0)["tokens"]
     timed0 = [t for t in toks if t["p"] == 0 and t["a"] is not None]
-    end = timed0[-1]["b"]
+    start, end = timed0[0]["a"], timed0[-1]["b"]
+    p1 = [t for t in toks if t["p"] == 1 and t["a"] is not None]
+    p1 = p1[:[t["w"] for t in p1].index("step") + 1]  # "Mara waited on the step."
     open_reader(page, live_server, book, 0)
     for _ in range(20):
         page.keyboard.press("BracketRight")
     ready(page)
     stop_mode(page)
+    page.evaluate(WATCH)
     page.keyboard.press("Space")
-    page.wait_for_function("!document.getElementById('au').paused")
+    looped_back(page, start, end)  # sentence 1 again, not on into sentence 2
+    looped_back(page, start, end)  # and again
+    assert max(page.evaluate("window.seen")) <= end + 0.35
+    assert page.evaluate(UNIT_TEXT) == "The knock came twice, and there was no answer from the house."
+    expect(page.locator("#play")).to_have_attribute("aria-label", "暂停")  # still "playing" in the breath
+    # → moves on: the next sentence loops now
+    page.keyboard.press("ArrowRight")
+    assert page.evaluate(UNIT_TEXT) == "Mara waited on the step."
+    page.evaluate("window.seen = []")
+    looped_back(page, p1[0]["a"], p1[-1]["b"])
+    assert page.evaluate(UNIT_TEXT) == "Mara waited on the step."
+    # Space stops the loop, also when pressed in the breath between two rounds
+    page.wait_for_function(f"document.getElementById('au').currentTime >= {p1[-1]['b'] - 0.1}"
+                           " || document.getElementById('au').paused", timeout=10000)
     page.wait_for_function("document.getElementById('au').paused", timeout=10000)
-    t = page.evaluate("document.getElementById('au').currentTime")
-    assert end - 0.2 <= t <= end + 0.35
+    page.keyboard.press("Space")
+    page.wait_for_timeout(1200)
+    assert page.evaluate("document.getElementById('au').paused") is True
+    expect(page.locator("#play")).to_have_attribute("aria-label", "播放")
     # ↑ replays from the unit start (R still does too)
     page.keyboard.press("ArrowUp")
     page.wait_for_function("!document.getElementById('au').paused")
-    assert page.evaluate("document.getElementById('au').currentTime") < 1.0
+    assert abs(page.evaluate("document.getElementById('au').currentTime") - p1[0]["a"]) < 0.6
     assert page.evaluate("scrollY") == 0  # ↑ is taken: it doesn't scroll the page
-    page.wait_for_function("document.getElementById('au').paused", timeout=10000)
+    page.keyboard.press("Space")
     page.keyboard.press("KeyR")
     page.wait_for_function("!document.getElementById('au').paused")
-    assert page.evaluate("document.getElementById('au').currentTime") < 1.0
-    # → plays the next sentence and stops at its end
-    page.keyboard.press("ArrowRight")
-    assert page.evaluate(UNIT_TEXT) == "Mara waited on the step."
-    page.wait_for_function("!document.getElementById('au').paused")
-    page.wait_for_function("document.getElementById('au').paused", timeout=10000)
-    assert page.evaluate(UNIT_TEXT) == "Mara waited on the step."
     # S switches back to 连续
     page.keyboard.press("KeyS")
     expect(page.get_by_role("button", name="连续")).to_have_attribute("aria-pressed", "true")
@@ -122,7 +147,7 @@ def test_works_without_audio_and_remembers_choices(page: Page, live_server, book
     page.reload()
     expect(page.locator("#zh-pos")).to_contain_text(" / ", timeout=15000)
     expect(page.locator("#zh-text")).to_be_hidden()  # Chinese off is remembered
-    expect(page.get_by_role("button", name="一句一停")).to_have_attribute("aria-pressed", "true")
+    expect(page.get_by_role("button", name="单句循环")).to_have_attribute("aria-pressed", "true")
     page.keyboard.press("ArrowDown")
     expect(page.locator("#zh-text")).to_be_visible()
 
@@ -174,7 +199,7 @@ def test_selection_star_saves_the_sentence_chinese_too(page: Page, live_server, 
     assert rec["zh"] == "【译】She called again, louder this time."
 
 
-def test_stop_mode_follows_a_seek_and_stops_at_that_sentence(page: Page, live_server, book):
+def test_loop_mode_follows_a_seek_and_loops_that_sentence(page: Page, live_server, book):
     convert(live_server, book, 0)
     toks = chapter(live_server, book, 0)["tokens"]
     p1 = [t for t in toks if t["p"] == 1 and t["a"] is not None]
@@ -184,28 +209,26 @@ def test_stop_mode_follows_a_seek_and_stops_at_that_sentence(page: Page, live_se
     stop_mode(page)
     page.keyboard.press("Space")
     # drag the slider while sentence 1 is still playing: seek in the same JS turn that sees it
-    # playing, so a slow machine cannot reach sentence 1's end (and stop there) first
+    # playing, so a slow machine cannot reach sentence 1's end (and loop there) first
     page.wait_for_function(f"""(() => {{ const au = document.getElementById('au');
-        if (au.paused) return false; au.currentTime = {p1[0]['a'] + 0.05}; return true; }})()""")
-    page.wait_for_function("document.getElementById('au').paused", timeout=10000)
-    t = page.evaluate("document.getElementById('au').currentTime")
-    # the bug stopped at sentence 1's end (before p1 starts); a loaded machine may pause a bit late
-    assert p1[-1]["b"] - 0.2 <= t <= p1[-1]["b"] + 0.6  # played that sentence to its end
+        if (au.paused) return false; au.currentTime = {p1[0]['a'] + 0.05}; {WATCH} return true; }})()""")
+    # the bug looped sentence 1 (before p1 starts); a loaded machine may turn round a bit late
+    looped_back(page, p1[0]["a"], p1[-1]["b"])
+    assert max(page.evaluate("window.seen")) <= p1[-1]["b"] + 0.6
     assert page.evaluate(UNIT_TEXT) == "Mara waited on the step."
 
 
-def test_stop_mode_also_stops_when_playback_is_started_from_outside(page: Page, live_server, book):
+def test_loop_mode_also_loops_when_playback_is_started_from_outside(page: Page, live_server, book):
     convert(live_server, book, 0)
     toks = chapter(live_server, book, 0)["tokens"]
-    end0 = [t for t in toks if t["p"] == 0 and t["a"] is not None][-1]["b"]
+    timed0 = [t for t in toks if t["p"] == 0 and t["a"] is not None]
     open_reader(page, live_server, book, 0)
     ready(page)
     stop_mode(page)
+    page.evaluate(WATCH)
     page.evaluate("document.getElementById('au').play()")  # e.g. a media key / headphones
-    page.wait_for_function("!document.getElementById('au').paused")
-    page.wait_for_function("document.getElementById('au').paused", timeout=10000)
-    t = page.evaluate("document.getElementById('au').currentTime")
-    assert end0 - 0.2 <= t <= end0 + 0.35
+    looped_back(page, timed0[0]["a"], timed0[-1]["b"])
+    assert max(page.evaluate("window.seen")) <= timed0[-1]["b"] + 0.35
 
 
 def test_switching_chapters_drops_the_old_sentences_at_once(page: Page, live_server, book):
@@ -239,6 +262,7 @@ def test_arrows_still_move_sentences_after_using_the_speed_slider(page: Page, li
     convert(live_server, book, 0)
     open_reader(page, live_server, book, 0)
     ready(page)
+    page.locator("#speed-btn").click()
     page.locator("#rate").focus()
     page.locator("#rate").dispatch_event("change")
     page.keyboard.press("ArrowRight")

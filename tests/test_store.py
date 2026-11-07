@@ -200,3 +200,35 @@ def test_clear_audio_resets_chapters(store):
     (c0, c1) = store.list_chapters(a)
     assert (c0["status"], c0["duration"], c0["voice"]) == ("none", None, None)
     assert c1["status"] == "none"
+
+
+def test_progress_remembers_when_the_book_was_last_read(store, monkeypatch):
+    a, b = mk(store, "a"), mk(store, "b")
+    assert store.read_at(a) is None
+    clock = iter([100.0, 200.0, 300.0])
+    monkeypatch.setattr("kokoro_reader.store.time.time", lambda: next(clock))
+    store.set_progress(a, 0, 0, 0, 1.0)
+    store.set_progress(b, 0, 0, 0, 1.0)
+    assert (store.read_at(a), store.read_at(b)) == (100.0, 200.0)
+    store.set_progress(a, 1, 0, 0, 2.0)
+    assert store.read_at(a) == 300.0
+    assert store.get_progress(a) == {"chapter": 1, "para": 0, "word": 0, "time": 2.0}  # shape unchanged
+
+
+def test_progress_table_from_before_read_at_gets_the_column(tmp_path):
+    import sqlite3
+    db = tmp_path / "old.sqlite"
+    with sqlite3.connect(db) as c:
+        c.executescript("""
+            CREATE TABLE books (id TEXT PRIMARY KEY, title TEXT, author TEXT, sha256 TEXT, voice TEXT,
+                                position INTEGER, created_at REAL);
+            CREATE TABLE progress (book_id TEXT PRIMARY KEY REFERENCES books(id) ON DELETE CASCADE,
+                                   chapter INTEGER NOT NULL, para INTEGER NOT NULL, word INTEGER NOT NULL,
+                                   time REAL NOT NULL);
+            INSERT INTO books VALUES ('x', 't', 'a', 'h', 'af_heart', 0, 1.0);
+            INSERT INTO progress VALUES ('x', 2, 0, 0, 5.0);
+        """)
+    s = Store(db)
+    assert s.get_progress("x")["chapter"] == 2 and s.read_at("x") is None
+    s.set_progress("x", 3, 0, 0, 1.0)
+    assert s.read_at("x") is not None

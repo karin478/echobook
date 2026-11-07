@@ -1,3 +1,4 @@
+import re
 import subprocess
 import numpy as np
 import pytest
@@ -71,13 +72,17 @@ def test_cut_clip(tmp_path):
     assert _duration(dst) == pytest.approx(1.3, abs=0.1)
 
 
-def test_voices_default_first_english_only():
-    assert tts.VOICES[0]["id"] == DEFAULT_VOICE
-    assert len(tts.VOICES) == 28
-    assert all(v["id"][0] in "ab" for v in tts.VOICES)
+def test_voices_kokoro_and_edge_english_only():
+    kokoro = [v for v in tts.VOICES if v["engine"] == "kokoro"]
+    edge = [v for v in tts.VOICES if v["engine"] == "edge"]
+    assert len(kokoro) == 28 and all(v["id"][0] in "ab" for v in kokoro)
+    assert len(edge) == 17 and all(re.fullmatch(r"en-(US|GB)-\w+Neural", v["id"]) for v in edge)
+    assert {v["id"] for v in edge} == set(tts.EDGE_VOICE_IDS)
+    assert len(kokoro) + len(edge) == len(tts.VOICES) == len({v["id"] for v in tts.VOICES})
     assert {v["accent"] for v in tts.VOICES} == {"美式", "英式"}
     assert {v["gender"] for v in tts.VOICES} == {"女", "男"}
-    assert all(set(v) == {"id", "label", "accent", "gender"} for v in tts.VOICES)
+    assert all(set(v) == {"id", "label", "accent", "gender", "engine", "default"} for v in tts.VOICES)
+    assert [v["id"] for v in tts.VOICES if v["default"]] == [DEFAULT_VOICE]
 
 
 def test_synth_preview_uses_fixed_sentence():
@@ -246,3 +251,141 @@ def test_speech_is_stored_at_48k_mono(tmp_path):
     audio.cut_clip(src, 1.0, 4.0, tmp_path / "c.mp3")
     for p in (src, tmp_path / "c.mp3"):
         assert 44_000 <= _bitrate(p) <= 52_000
+
+
+# ---- edge-tts (Microsoft Natural voices) ----
+
+def test_edge_tokens_rebuild_text_with_word_times():
+    text = "He said, \u201cHi\u2014there.\u201d Then left."
+    words = [("He", 0.1, 0.2), ("said", 0.2, 0.4), ("Hi", 0.5, 0.6), ("there", 0.6, 0.8),
+             ("Then", 1.0, 1.2), ("left", 1.2, 1.4)]
+    toks = tts.edge_tokens(3, text, words)
+    assert "".join(t["w"] + t["s"] for t in toks) == text
+    assert all(t["p"] == 3 and not re.search(r"\s", t["w"]) for t in toks)
+    timed = [(t["w"], t["a"], t["b"]) for t in toks if t["a"] is not None]
+    assert timed == words
+    assert {t["w"] for t in toks if t["a"] is None} <= {",", "\u201c", "\u2014", ".\u201d", "."}
+
+
+def test_edge_tokens_leave_unmatched_words_untimed():
+    text = "Fish & chips, please."
+    toks = tts.edge_tokens(0, text, [("Fish", 0.0, 0.3), ("&amp;", 0.3, 0.4), ("chips", 0.4, 0.7),
+                                     ("nonsense", 0.7, 0.8), ("please", 0.8, 1.0)])
+    assert "".join(t["w"] + t["s"] for t in toks) == text
+    timed = [t["w"] for t in toks if t["a"] is not None]
+    assert timed == ["Fish", "&", "chips", "please"]  # html-escaped boundary text is unescaped; unknown words skipped
+
+
+def test_edge_synth_assembles_paragraphs_with_trim_gap_and_progress():
+    calls = []
+
+    def fetch(text, voice):
+        calls.append((text, voice))
+        # 0.5 s lead silence, 1 s speech, 0.6 s tail; the word sits in the speech
+        return _padded(0.5, 1.0, 0.6), [(text, 0.6, 1.0)]
+
+    seen = []
+    samples, toks = tts.EdgeSynth(fetch=fetch).synth_chapter(["x", "\u2022 \u2022 \u2022", "y"], "en-US-AriaNeural",
+                                                             on_progress=seen.append)
+    assert sorted(calls) == [("x", "en-US-AriaNeural"), ("y", "en-US-AriaNeural")]  # no request for "• • •"
+    timed = [t for t in toks if t["a"] is not None]
+    assert [t["w"] for t in timed] == ["x", "y"]
+    assert timed[0]["a"] == pytest.approx(0.3, abs=0.01)  # 0.6 minus the 0.3 s trimmed lead
+    assert timed[1]["a"] == pytest.approx(1.4 + PARA_GAP + 0.3, abs=0.02)
+    assert [t["p"] for t in toks] == [0, 2]
+    assert len(samples) / SAMPLE_RATE == pytest.approx(2 * (1.4 + PARA_GAP), abs=0.02)
+    assert seen[-1] == 1.0 and seen == sorted(seen)
+
+
+def test_edge_synth_retries_flaky_requests(monkeypatch):
+    monkeypatch.setattr(tts.time, "sleep", lambda s: None)
+    n = {"x": 0}
+
+    def flaky(text, voice):
+        n["x"] += 1
+        if n["x"] < 3:
+            raise RuntimeError("No audio was received")
+        return _padded(0.1, 0.5, 0.1), [(text, 0.1, 0.6)]
+
+    _, toks = tts.EdgeSynth(fetch=flaky).synth_chapter(["x"], "en-US-AriaNeural")
+    assert n["x"] == 3 and toks[0]["w"] == "x"
+
+    def dead(text, voice):
+        raise RuntimeError("403")
+
+    with pytest.raises(RuntimeError):
+        tts.EdgeSynth(fetch=dead).synth_chapter(["x"], "en-US-AriaNeural")
+
+
+def test_routing_synth_sends_edge_voices_to_edge(monkeypatch):
+    monkeypatch.setenv("KOKORO_READER_EDGE", "1")
+    class Rec:
+        def __init__(self, name):
+            self.name, self.got = name, []
+
+        def synth_chapter(self, paragraphs, voice, on_progress=None):
+            self.got.append(voice)
+            return np.zeros(1, dtype=np.float32), []
+
+    k, e = Rec("k"), Rec("e")
+    r = tts.RoutingSynth(kokoro=k, edge=e)
+    r.synth_chapter(["a"], "af_heart")
+    r.synth_chapter(["a"], "en-GB-SoniaNeural")
+    assert (k.got, e.got) == (["af_heart"], ["en-GB-SoniaNeural"])
+    assert isinstance(tts.RoutingSynth().kokoro, tts.KokoroSynth)  # no-arg construction (preview synth)
+
+
+def test_main_serves_both_engines(monkeypatch):
+    import kokoro_reader.__main__ as entry
+    seen = {}
+    monkeypatch.delenv("KOKORO_READER_FAKE_TTS", raising=False)
+    monkeypatch.setattr(entry, "create_app", lambda home, synth: seen.setdefault("synth", synth))
+    monkeypatch.setattr(entry.uvicorn, "run", lambda app, **kw: None)
+    entry.main()
+    assert isinstance(seen["synth"], tts.RoutingSynth)
+
+
+
+def test_engine_of_voice():
+    assert tts.engine_of("af_heart") == "kokoro"
+    assert tts.engine_of("en-US-AvaMultilingualNeural") == "edge"
+
+
+
+# ---- Microsoft voices are opt-in (KOKORO_READER_EDGE) ----
+
+def _edge_ids(vs):
+    return {v["id"] for v in vs if v["engine"] == "edge"}
+
+
+def test_edge_voices_are_off_by_default(monkeypatch):
+    assert _edge_ids(tts.voices()) == set() and not tts.edge_enabled()
+    assert {v["id"] for v in tts.voices()} == {v["id"] for v in tts.VOICES if v["engine"] == "kokoro"}
+    monkeypatch.setenv("KOKORO_READER_EDGE", "1")
+    assert tts.edge_enabled() and _edge_ids(tts.voices()) == set(tts.EDGE_VOICE_IDS)
+    monkeypatch.setenv("KOKORO_READER_EDGE", "0")
+    assert not tts.edge_enabled()
+
+
+def test_edge_switch_can_live_in_the_users_env_file(tmp_path, monkeypatch):
+    env = tmp_path / ".env"
+    env.write_text("OPENROUTER_API_KEY=x\nKOKORO_READER_EDGE=1\n")
+    monkeypatch.setenv("KOKORO_TRANSLATE_ENV", str(env))
+    assert tts.edge_enabled()
+    monkeypatch.setenv("KOKORO_READER_EDGE", "0")  # the process environment wins over the file
+    assert not tts.edge_enabled()
+
+
+def test_edge_needs_the_package(monkeypatch):
+    monkeypatch.setenv("KOKORO_READER_EDGE", "1")
+    monkeypatch.setattr(tts, "_edge_installed", lambda: False)
+    assert not tts.edge_enabled() and _edge_ids(tts.voices()) == set()
+
+
+def test_routing_synth_refuses_edge_voices_when_off():
+    class Never:
+        def synth_chapter(self, *a, **kw):
+            raise AssertionError("should not be called")
+
+    with pytest.raises(RuntimeError, match="KOKORO_READER_EDGE"):
+        tts.RoutingSynth(kokoro=Never(), edge=Never()).synth_chapter(["a"], "en-US-AriaNeural")

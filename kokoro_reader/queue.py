@@ -15,7 +15,7 @@ from .audio import write_mp3
 from .estimate import SpeedLog
 from .library import Library
 from .store import Store
-from .tts import Synthesizer
+from .tts import Synthesizer, engine_of
 
 log = logging.getLogger(__name__)
 
@@ -190,7 +190,7 @@ class ConversionQueue:
             if self.speed is not None:
                 try:
                     chars = next((c["chars"] for c in self.store.list_chapters(book_id) if c["idx"] == idx), 0)
-                    self.speed.record(chars, self.clock() - started, duration)
+                    self.speed.record(chars, self.clock() - started, duration, engine=engine_of(voice))
                 except OSError:
                     log.warning("could not record conversion speed", exc_info=True)
         except Cancelled:

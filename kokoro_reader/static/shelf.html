@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>我的书架 · Echobook</title>
 <link rel="icon" href="icon.svg?v=1" type="image/svg+xml">
-<link rel="stylesheet" href="css/app.css?v=16">
-<script src="js/theme.js?v=16"></script>
+<link rel="stylesheet" href="css/app.css?v=22">
+<script src="js/theme.js?v=22"></script>
 </head>
 <body>
 <main class="wrap">
@@ -19,11 +19,12 @@
       <span class="storage" id="storage" title="Echobook 的书、音频和生词一共占用的磁盘空间"></span>
       <span class="theme-slot"></span>
       <a class="btn ghost" href="vocab.html">生词本</a>
-      <button class="btn primary" id="upload-btn" type="button">＋ 上传 EPUB</button>
+      <button class="btn" id="upload-btn" type="button">＋ 上传 EPUB</button>
       <input id="file-input" type="file" accept=".epub,application/epub+zip" multiple hidden>
     </div>
   </header>
 
+  <section id="continue" class="continue" aria-label="继续阅读" hidden></section>
   <section id="grid" class="grid" aria-label="书架"></section>
   <p id="empty-note" class="empty-note" hidden>书架还是空的。把 EPUB 拖进这个页面，或点右上角「＋ 上传 EPUB」。</p>
 </main>
@@ -51,7 +52,7 @@
   </div>
 </div>
 
-<script src="js/api.js?v=16"></script>
-<script src="js/shelf.js?v=16"></script>
+<script src="js/api.js?v=22"></script>
+<script src="js/shelf.js?v=22"></script>
 </body>
 </html>

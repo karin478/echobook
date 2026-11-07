@@ -29,12 +29,11 @@ from .store import Store
 from . import anki as ankimod
 from .quick_mt import MTError, make_mt
 from .translate import TranslateError, Translator, make_translator
-from .tts import VOICES, Synthesizer, synth_preview
+from .tts import Synthesizer, engine_of, synth_preview, voices
 from .vocab import save_vocab, selection_context
 
 STATIC_DIR = Path(__file__).parent / "static"
 _ID = re.compile(r"^[0-9a-f]{32}$")
-_VOICE_IDS = {v["id"] for v in VOICES}
 MAX_UPLOAD_BYTES = 300 * 1024 * 1024
 GLOSS_CACHE = 500  # 划词 results kept in memory
 log = logging.getLogger("kokoro_reader")
@@ -94,6 +93,11 @@ class LookupBody(BaseModel):
     mode: Literal["quick", "explain"]
 
 
+def _voice_ids() -> set[str]:
+    """Voices a book may use right now (Microsoft ones only while KOKORO_READER_EDGE is on)."""
+    return {v["id"] for v in voices()}
+
+
 def _valid_id(s: str) -> bool:
     return bool(_ID.match(s))
 
@@ -103,7 +107,10 @@ def create_app(home: Path, synth: Synthesizer, start_worker: bool = True,
                translator_factory: Callable[[], Translator] | None = None,
                translate_workers: int = 4,
                mt_factory: Callable[[], object | None] | None = None,
-               anki_factory: Callable[[], object] | None = None) -> FastAPI:
+               anki_factory: Callable[[], object] | None = None,
+               warm_previews: bool | None = None) -> FastAPI:
+    """warm_previews: make every voice's 试听 ahead in the background (default: with the worker),
+    so picking a voice plays at once instead of waiting for it to be synthesised."""
     home = Path(home)
     store = Store(home / "kokoro.db")
     library = Library(home, store)
@@ -114,6 +121,51 @@ def create_app(home: Path, synth: Synthesizer, start_worker: bool = True,
     # previews get their own synth so they never share inference state with the worker
     preview_synth = preview_synth if preview_synth is not None else type(synth)()
     preview_lock = threading.Lock()
+    warm_previews = start_worker if warm_previews is None else warm_previews
+    warm_guard, warm_stop = threading.Lock(), threading.Event()
+    warming: list[threading.Thread] = []
+
+    def preview_path(voice: str) -> Path:
+        return home / "previews" / f"{voice}.mp3"
+
+    def ensure_preview(voice: str) -> Path:
+        path = preview_path(voice)
+        with preview_lock:
+            if not path.exists():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                samples = synth_preview(preview_synth, voice)
+                tmp = path.with_name(path.name + ".tmp")
+                try:
+                    write_mp3(samples, tmp)
+                    os.replace(tmp, path)
+                except BaseException:
+                    tmp.unlink(missing_ok=True)
+                    raise
+        return path
+
+    def warm() -> None:
+        for v in sorted(voices(), key=lambda v: not v["default"]):  # the default voice first
+            if warm_stop.is_set():
+                return
+            if preview_path(v["id"]).exists():
+                continue
+            try:
+                ensure_preview(v["id"])
+            except Exception:  # one voice failing (offline Microsoft voice) must not stop the rest
+                log.exception("preview for %s failed", v["id"])
+
+    def kick_warm() -> None:
+        """Start making the missing previews (one background thread at a time)."""
+        if not warm_previews:
+            return
+        with warm_guard:
+            if warming and warming[-1].is_alive():
+                return
+            if all(preview_path(v["id"]).exists() for v in voices()):
+                return
+            t = threading.Thread(target=warm, name="preview-warm", daemon=True)
+            warming[:] = [t]
+            t.start()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -125,9 +177,11 @@ def create_app(home: Path, synth: Synthesizer, start_worker: bool = True,
             log.exception("startup sweep failed")
         if start_worker:
             queue.start()
+        kick_warm()
         try:
             yield
         finally:
+            warm_stop.set()
             queue.stop()
             translations.shutdown()
 
@@ -159,6 +213,7 @@ def create_app(home: Path, synth: Synthesizer, start_worker: bool = True,
     app.state.store, app.state.library, app.state.queue = store, library, queue
     app.state.translations = translations
     app.state.preview_synth = preview_synth
+    app.state.previews_warming = lambda: bool(warming) and warming[-1].is_alive()
 
     def book_or_404(book_id: str) -> dict:
         book = store.get_book(book_id) if _valid_id(book_id) else None
@@ -176,6 +231,7 @@ def create_app(home: Path, synth: Synthesizer, start_worker: bool = True,
             "converted": sum(1 for c in chapters if c["status"] == "done"),
             "translated": sum(1 for c in chapters if library.translation_path(book["id"], c["idx"]).exists()),
             "progress": store.get_progress(book["id"]),
+            "read_at": store.read_at(book["id"]),
         }
 
     # ---- root ----
@@ -249,7 +305,7 @@ def create_app(home: Path, synth: Synthesizer, start_worker: bool = True,
             chapters.append({**c, "zh": zh["status"], "zh_progress": zh["progress"]})
         g = library.glossary(book_id)
         return {**book_info(book), "chapters": chapters, "glossary": None if g is None else len(g),
-                "estimate": speed.rates(), "disk": library.disk_usage(book_id)}
+                "estimate": speed.rates(engine_of(book["voice"])), "disk": library.disk_usage(book_id)}
 
     def translate_chapters(book: dict, idxs: list[int], priority: str) -> int:
         """Start (or, for "high", move up) the Chinese for these chapters, first one first;
@@ -292,7 +348,7 @@ def create_app(home: Path, synth: Synthesizer, start_worker: bool = True,
     @app.put("/api/books/{book_id}/voice")
     def set_voice(book_id: str, body: VoiceBody):
         book_or_404(book_id)
-        if body.voice not in _VOICE_IDS:
+        if body.voice not in _voice_ids():
             raise HTTPException(400, "不支持的音色")
         store.set_book_voice(book_id, body.voice)
         return {"voice": body.voice}
@@ -425,29 +481,23 @@ def create_app(home: Path, synth: Synthesizer, start_worker: bool = True,
             if book_id not in chars:
                 chars[book_id] = {c["idx"]: c["chars"] for c in store.list_chapters(book_id)}
             return chars[book_id].get(idx, 0)
-        return {**snap, "eta": eta_by_book(snap, chars_of, speed.rates()["conv_cps"])}
+        rates = {e: speed.rates(e)["conv_cps"] for e in ("kokoro", "edge")}
+
+        def conv_cps(book_id):
+            book = store.get_book(book_id)
+            return rates[engine_of(book["voice"]) if book else "kokoro"]
+        return {**snap, "eta": eta_by_book(snap, chars_of, conv_cps)}
 
     @app.get("/api/voices")
     def get_voices():
-        return VOICES
+        kick_warm()  # a voice that just became available (Microsoft switched on) gets its 试听 too
+        return voices()
 
     @app.get("/api/voices/{voice}/preview.mp3")
     def voice_preview(voice: str):
-        if voice not in _VOICE_IDS:
+        if voice not in _voice_ids():
             raise HTTPException(404, "音色不存在")
-        path = home / "previews" / f"{voice}.mp3"
-        with preview_lock:
-            if not path.exists():
-                path.parent.mkdir(parents=True, exist_ok=True)
-                samples = synth_preview(preview_synth, voice)
-                tmp = path.with_name(path.name + ".tmp")
-                try:
-                    write_mp3(samples, tmp)
-                    os.replace(tmp, path)
-                except BaseException:
-                    tmp.unlink(missing_ok=True)
-                    raise
-        return FileResponse(path, media_type="audio/mpeg")
+        return FileResponse(ensure_preview(voice), media_type="audio/mpeg")
 
     # ---- vocab ----
     def check_selection(book_id: str, chapter: int) -> None:

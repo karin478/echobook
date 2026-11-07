@@ -11,6 +11,8 @@ def _no_real_translation(monkeypatch, tmp_path_factory):
     monkeypatch.setenv("KOKORO_READER_FAKE_TRANSLATE", "1")
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.setenv("KOKORO_TRANSLATE_ENV", str(tmp_path_factory.getbasetemp() / "no-such.env"))
+    # Microsoft voices are opt-in; a test that wants them sets KOKORO_READER_EDGE itself
+    monkeypatch.delenv("KOKORO_READER_EDGE", raising=False)
     # and never the real Anki on this machine (AnkiConnect listens on localhost, which is allowed)
     monkeypatch.setenv("KOKORO_ANKI_URL", "http://127.0.0.1:9")
 

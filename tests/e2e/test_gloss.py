@@ -1,5 +1,5 @@
-"""划词: selecting text pops up a 翻译 or an AI 讲解 at once — which one is a sticky switch next to
-「中文」(T toggles), never a question per selection. ⭐ 收藏 keeps the result with the word."""
+"""划词: selecting text pops up a 翻译 or an AI 讲解 at once — which one is a sticky switch in the
+⋯ menu (T toggles), never a question per selection. ⭐ 收藏 keeps the result with the word."""
 
 import pytest
 from playwright.sync_api import Page, expect
@@ -16,7 +16,7 @@ def test_selection_shows_a_translation_and_saving_keeps_it(page: Page, live_serv
     convert(live_server, book, 0)
     open_reader(page, live_server, book, 0)
     ready(page)
-    expect(page.get_by_role("button", name="翻译", exact=True)).to_have_attribute("aria-pressed", "true")
+    expect(page.locator("#gloss-quick")).to_have_attribute("aria-pressed", "true")
     page.evaluate(SELECT_JS, [0, "no", 0, "answer", False])
     expect(page.locator("#gloss-body")).to_have_text("【翻译】no answer")
     page.get_by_role("button", name="⭐ 收藏").click()
@@ -30,13 +30,14 @@ def test_explain_mode_is_a_sticky_switch_and_the_vocab_page_shows_it(page: Page,
     convert(live_server, book, 0)
     open_reader(page, live_server, book, 0)
     ready(page)
+    page.get_by_role("button", name="更多").click()
     page.get_by_role("button", name="讲解", exact=True).click()
-    expect(page.get_by_role("button", name="讲解", exact=True)).to_have_attribute("aria-pressed", "true")
+    expect(page.locator("#gloss-explain")).to_have_attribute("aria-pressed", "true")
     page.evaluate(SELECT_JS, [1, "louder", 1, "louder", False])
     expect(page.locator("#gloss-body")).to_have_text(f"【讲解】louder｜{LOUDER}")
     # T flips the mode and the open popup follows it
     page.keyboard.press("KeyT")
-    expect(page.get_by_role("button", name="翻译", exact=True)).to_have_attribute("aria-pressed", "true")
+    expect(page.locator("#gloss-quick")).to_have_attribute("aria-pressed", "true")
     expect(page.locator("#gloss-body")).to_have_text("【翻译】louder")
     page.keyboard.press("KeyT")
     expect(page.locator("#gloss-body")).to_have_text(f"【讲解】louder｜{LOUDER}")
@@ -44,7 +45,7 @@ def test_explain_mode_is_a_sticky_switch_and_the_vocab_page_shows_it(page: Page,
     expect(page.locator(".toasts")).to_contain_text("已收藏")
     page.reload()
     ready(page)
-    expect(page.get_by_role("button", name="讲解", exact=True)).to_have_attribute("aria-pressed", "true")
+    expect(page.locator("#gloss-explain")).to_have_attribute("aria-pressed", "true")
     page.goto(f"{live_server.url}/vocab.html")
     item = page.locator(".vocab-item").first
     expect(item.locator(".gloss")).to_contain_text(f"【讲解】louder｜{LOUDER}")
@@ -75,6 +76,7 @@ def test_explain_reply_is_laid_out_unit_by_unit(page: Page, live_server, book):
         json={"mode": "explain", "text": "louder", "result": EXPLAINED}))
     open_reader(page, live_server, book, 0)
     ready(page)
+    page.get_by_role("button", name="更多").click()
     page.get_by_role("button", name="讲解", exact=True).click()
     page.evaluate(SELECT_JS, [1, "louder", 1, "louder", False])
     body = page.locator("#gloss-body")
@@ -133,6 +135,7 @@ def test_each_explained_unit_can_be_saved_on_its_own(page: Page, live_server, bo
         json={"mode": "explain", "text": LOUDER, "result": UNITS, "source": "model"}))
     open_reader(page, live_server, book, 0)
     ready(page)
+    page.get_by_role("button", name="更多").click()
     page.get_by_role("button", name="讲解", exact=True).click()
     page.evaluate(SELECT_JS, [1, "called", 1, "louder", False])
     body = page.locator("#gloss-body")

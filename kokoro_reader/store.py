@@ -7,6 +7,10 @@ from pathlib import Path
 
 from .config import DEFAULT_VOICE
 
+
+def _now() -> float:
+    return time.time()  # set_progress has a `time` argument that hides the module
+
 STATUSES = ("none", "queued", "converting", "done", "error")
 
 SCHEMA = """
@@ -38,7 +42,8 @@ CREATE TABLE IF NOT EXISTS progress (
     chapter INTEGER NOT NULL,
     para INTEGER NOT NULL,
     word INTEGER NOT NULL,
-    time REAL NOT NULL
+    time REAL NOT NULL,
+    read_at REAL  -- when this position was saved: the shelf's 继续阅读 is the latest one
 );
 CREATE TABLE IF NOT EXISTS vocab (
     seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -75,6 +80,8 @@ class Store:
             sql = c.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='vocab'").fetchone()[0]
             if "REFERENCES" in sql:
                 c.executescript("BEGIN;" + _VOCAB_MIGRATION + "COMMIT;")
+            if "read_at" not in [r[1] for r in c.execute("PRAGMA table_info(progress)")]:
+                c.execute("ALTER TABLE progress ADD COLUMN read_at REAL")
 
     @contextmanager
     def _conn(self):
@@ -134,10 +141,10 @@ class Store:
     def set_progress(self, id, chapter, para, word, time):
         with self._conn() as c:
             c.execute(
-                "INSERT INTO progress (book_id, chapter, para, word, time) VALUES (?,?,?,?,?) "
+                "INSERT INTO progress (book_id, chapter, para, word, time, read_at) VALUES (?,?,?,?,?,?) "
                 "ON CONFLICT(book_id) DO UPDATE SET chapter=excluded.chapter, "
-                "para=excluded.para, word=excluded.word, time=excluded.time",
-                (id, chapter, para, word, time),
+                "para=excluded.para, word=excluded.word, time=excluded.time, read_at=excluded.read_at",
+                (id, chapter, para, word, time, _now()),
             )
 
     def get_progress(self, id):
@@ -146,6 +153,11 @@ class Store:
                 "SELECT chapter, para, word, time FROM progress WHERE book_id=?", (id,)
             ).fetchone()
         return dict(r) if r else None
+
+    def read_at(self, id):
+        with self._conn() as c:
+            r = c.execute("SELECT read_at FROM progress WHERE book_id=?", (id,)).fetchone()
+        return r[0] if r else None
 
     # ---- chapters ----
     def add_chapters(self, book_id, chapters):

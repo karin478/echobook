@@ -77,19 +77,20 @@ def test_pick_deck_once_then_push_one_and_the_rest(page: Page, live_server, seed
     items = page.locator(".vocab-item")
     oldest = items.nth(2)
     oldest.get_by_role("button", name="推到 Anki").click()
-    expect(oldest.get_by_role("button", name="已在 Anki")).to_be_disabled()
+    expect(oldest.locator(".anki-done")).to_have_text("已在 Anki")  # a status, not a dead button
+    expect(oldest.get_by_role("button", name="推到 Anki")).to_have_count(0)
     (note,) = fake_anki.notes()
     assert note["deckName"] == "用来导入" and note["fields"]["正面"].startswith("<b>quiet</b>")
 
     bar.get_by_role("button", name="全部推到 Anki（2 条）").click()
-    expect(page.locator(".vocab-item").get_by_role("button", name="已在 Anki")).to_have_count(3)
+    expect(page.locator(".vocab-item .anki-done")).to_have_count(3)
     assert len(fake_anki.notes()) == 3
     expect(bar.get_by_role("button", name="全部推到 Anki（0 条）")).to_be_disabled()
 
     # remembered across reloads, on both sides
     page.reload()
     expect(bar).to_contain_text("用来导入 · 问答题")
-    expect(page.locator(".vocab-item").get_by_role("button", name="已在 Anki")).to_have_count(3)
+    expect(page.locator(".vocab-item .anki-done")).to_have_count(3)
     assert all(r.get("anki_note_id") for r in live_server.api("GET", "/api/vocab"))
 
 

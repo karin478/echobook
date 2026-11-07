@@ -130,6 +130,7 @@ def test_speed_slider_and_brackets(page: Page, live_server, book):
     assert audio(page, "playbackRate") == 2.0
     expect(page.locator("#rate-label")).to_have_text("2.00×")
     # with the slider focused, [ still changes the rate exactly once
+    page.locator("#speed-btn").click()
     page.locator("#rate").focus()
     page.keyboard.press("BracketLeft")
     assert audio(page, "playbackRate") == pytest.approx(1.95)

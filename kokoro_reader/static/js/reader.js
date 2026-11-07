@@ -14,7 +14,7 @@
   const rateInput = $("rate"), rateLabel = $("rate-label"), star = $("star");
   const pop = $("gloss-pop"), popBody = $("gloss-body");
   const banner = $("banner"), bannerMsg = $("banner-msg"), bannerBtn = $("banner-btn");
-  const dock = $("dock"), kbdHint = $("kbd-hint");
+  const dock = $("dock");
 
   const RATE_KEY = "kokoro-reader:rate";
   const SAVE_EVERY_MS = 10000;
@@ -43,7 +43,9 @@
   let actedSinceEnd = false; // reader seeked/played after 'ended': don't auto-jump to the next chapter
 
   // 逐句 (the only mode): one unit (a Chinese piece's sentence range) at a time
-  let stopMode = false;     // 一句一停: pause at each unit end; else 连续 (follow the audio)
+  let stopMode = false;     // 单句循环: replay the unit at its end; else 连续 (follow the audio)
+  const LOOP_GAP_MS = 600;  // 单句循环: a short breath between two rounds of the same sentence
+  let loopTimer = 0;        // set while in that breath (the audio is paused, but we count as playing)
   let sents = null;         // /sentences payload + {idx}; null = (re)load pending
   let units = [], unitsIdx = null, u = -1;
   let zhOn = true;           // show the current unit's Chinese (sticky, remembered)
@@ -140,8 +142,8 @@
   let lastTimeText = "";
   function tick() {
     const t = au.currentTime, i = find(t);
-    // 一句一停: stop at the unit end (not mid-seek: "seeked" picks the unit we land in)
-    if (unitEnd !== null && !au.paused && !inSeek && t >= unitEnd) { unitEnd = null; au.pause(); }
+    // 单句循环: turn round at the unit end (not mid-seek: "seeked" picks the unit we land in)
+    if (unitEnd !== null && !au.paused && !inSeek && t >= unitEnd) unitDone();
     if (i !== cur) {
       if (cur >= 0) spans[cur].el.classList.remove("on");
       cur = i;
@@ -192,6 +194,18 @@
     drillToggle();
   }
 
+  /** 单句循环: the unit played to its end — breathe, then play it again (until you move on). */
+  function unitDone() {
+    unitEnd = null;
+    cancelLoop();
+    loopTimer = setTimeout(() => { loopTimer = 0; if (stopMode) playUnit(); else setPlayIcon(false); }, LOOP_GAP_MS);
+    au.pause(); // its "pause" event sees loopTimer: the play button keeps saying 暂停
+  }
+
+  function cancelLoop() {
+    if (loopTimer) { clearTimeout(loopTimer); loopTimer = 0; }
+  }
+
   function seek(t) {
     if (au.readyState >= 1) au.currentTime = t;
     else pendingSeek = t;
@@ -212,18 +226,19 @@
   }
   au.addEventListener("play", () => {
     setPlayIcon(true);
-    // 一句一停 started from outside our own controls (media key, headphones): stop at this unit's end
+    cancelLoop(); // whoever started it, the pending next round is not needed any more
+    // 单句循环 started from outside our own controls (media key, headphones): loop this unit
     if (stopMode && unitEnd === null) {
       const x = units[u];
       if (x && x.b !== null && au.currentTime < x.b - 0.05) unitEnd = x.b;
     }
     kick();
   });
-  // rAF does not run in a hidden tab: timeupdate still stops 一句一停 at the unit end
+  // rAF does not run in a hidden tab: timeupdate still turns 单句循环 round at the unit end
   au.addEventListener("timeupdate", () => {
-    if (unitEnd !== null && !au.paused && !inSeek && au.currentTime >= unitEnd) { unitEnd = null; au.pause(); }
+    if (unitEnd !== null && !au.paused && !inSeek && au.currentTime >= unitEnd) unitDone();
   });
-  au.addEventListener("pause", () => { setPlayIcon(false); tick(); saveProgress(); });
+  au.addEventListener("pause", () => { setPlayIcon(!!loopTimer); tick(); saveProgress(); });
   // any jump of the playhead (slider, resume, chapter end) moves the current sentence with it
   // between "seeking" and our "seeked" handler the old stop point must not fire (timeupdate comes first)
   let inSeek = false;
@@ -247,7 +262,7 @@
     const ms = navigator.mediaSession;
     try {
       ms.setActionHandler("play", () => drillToggle());
-      ms.setActionHandler("pause", () => au.pause());
+      ms.setActionHandler("pause", () => { stopLoop(); au.pause(); });
       ms.setActionHandler("nexttrack", () => goUnit(u + 1));
       ms.setActionHandler("previoustrack", () => goUnit(u - 1));
     } catch (e) { /* unsupported action */ }
@@ -273,9 +288,7 @@
   addEventListener("wheel", () => { userScroll = Date.now(); }, { passive: true });
   addEventListener("touchmove", () => { userScroll = Date.now(); }, { passive: true });
   // ---------------------------------------------------------------- dock (sentence strip + transport)
-  const HINT = "空格 播放/暂停 · ←/→ 上/下一句 · ↑ 重听本句 · ↓ 中文开/关 · F 收藏本句 · S 连续/一句一停 · 点单词从那里读 · 划选出翻译/讲解（T 切换）· [ ] 语速";
   function syncDock() {
-    kbdHint.textContent = HINT;
     barH = dock.hidden ? 0 : dock.offsetHeight;
     document.body.style.setProperty("--dock-h", barH + "px");
   }
@@ -297,7 +310,7 @@
   function undoClickSeek() {
     if (clickSeek && performance.now() - clickSeek.at < 800) {
       seek(clickSeek.time);
-      if (clickSeek.paused) au.pause();
+      if (clickSeek.paused) { stopLoop(); au.pause(); }
     }
     clickSeek = null;
   }
@@ -310,6 +323,7 @@
     au.playbackRate = r;
     rateInput.value = String(r);
     rateLabel.textContent = r.toFixed(2) + "×";
+    for (const b of presets.children) b.setAttribute("aria-pressed", String(Number(b.dataset.r) === r));
     if (persist) {
       try { localStorage.setItem(RATE_KEY, String(r)); } catch (e) { /* private mode */ }
     }
@@ -326,13 +340,64 @@
 
   rateInput.addEventListener("input", () => setRate(Number(rateInput.value)));
 
+  // ---------------------------------------------------------------- dock popovers (语速, ⋯) + 快捷键
+  const RATES = [0.75, 0.85, 1, 1.15, 1.25, 1.5];
+  const presets = $("rate-presets");
+  for (const r of RATES) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.dataset.r = String(r);
+    b.textContent = r.toFixed(2) + "×";
+    b.addEventListener("mousedown", (e) => e.preventDefault());
+    b.addEventListener("click", () => setRate(r));
+    presets.appendChild(b);
+  }
+  const pops = [[$("speed-btn"), $("speed-pop")], [$("more-btn"), $("more-pop")]];
+  function closePops(except) {
+    let closed = false;
+    for (const [btn, el] of pops) {
+      if (el === except || el.hidden) continue;
+      el.hidden = true;
+      btn.setAttribute("aria-expanded", "false");
+      closed = true;
+    }
+    return closed;
+  }
+  for (const [btn, el] of pops) {
+    btn.addEventListener("mousedown", (e) => e.preventDefault());
+    btn.addEventListener("click", () => {
+      closePops(el);
+      el.hidden = !el.hidden;
+      btn.setAttribute("aria-expanded", String(!el.hidden));
+    });
+  }
+  document.addEventListener("mousedown", (e) => {
+    if (!e.target.closest(".pop-wrap")) closePops();
+  });
+
+  const keysDlg = $("keys-dlg");
+  function toggleKeys(show = !keysDlg.open) {
+    closePops();
+    if (show && !keysDlg.open) keysDlg.showModal();
+    else if (!show && keysDlg.open) keysDlg.close();
+  }
+  $("keys-open").addEventListener("click", () => toggleKeys(true));
+  keysDlg.addEventListener("click", (e) => { if (e.target === keysDlg) toggleKeys(false); }); // backdrop
+
   // ---------------------------------------------------------------- keyboard
   addEventListener("keydown", (e) => {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === "?" || (e.code === "Slash" && e.shiftKey)) {
+      e.preventDefault();
+      if (!e.repeat) toggleKeys();
+      return;
+    }
+    if (keysDlg.open) return; // the sheet is up: Escape closes it (native), nothing else plays
     const t = e.target, tag = t.tagName;
     const barRange = tag === "INPUT" && t.type === "range" && bar.contains(t);
     if ((tag === "INPUT" && !barRange) || tag === "SELECT" || tag === "TEXTAREA" || t.isContentEditable) return;
     if (e.key === "Escape") {
+      if (closePops()) return;
       if (!pop.hidden) { hideStar(); getSelection().removeAllRanges(); }
       return;
     }
@@ -554,7 +619,7 @@
     else if (isReady(d)) enterEmpty(d, autoplay);
     else enterTextMode(d);
     units = []; unitsIdx = null; u = -1; // never paint/save the previous chapter's sentences on this one
-    sents = null; unitEnd = null; paint(); renderCard(); loadSentences();
+    sents = null; unitEnd = null; stopLoop(); paint(); renderCard(); loadSentences();
   }
 
   async function loadChapter(idx, { autoplay = false, data = null } = {}) {
@@ -583,7 +648,7 @@
   async function onEnded() {
     actedSinceEnd = false;
     saveProgress({ force: true });
-    if (stopMode) return; // 一句一停 stays on this chapter; 连续 moves on to the next one
+    if (stopMode) return; // 单句循环 stays on this chapter; 连续 moves on to the next one
     const next = ch ? ch.next_idx : null;
     if (next === null || next === undefined) {
       showBanner("全书读完了 · 这是最后一章");
@@ -685,8 +750,8 @@
     return { para: Number(p.dataset.p), start, end, range: r };
   }
 
-  // 划词: a selection pops up its 翻译 or AI 讲解 at once (the mode is the sticky switch next to
-  // 中文, T toggles); ⭐ 收藏 in the popup saves the word with that result.
+  // 划词: a selection pops up its 翻译 or AI 讲解 at once (the mode is the sticky switch in the
+  // ⋯ menu, T toggles); ⭐ 收藏 in the popup saves the word with that result.
   const GLOSS_KEY = "kokoro-reader:gloss";
   const GLOSS_WAIT = { quick: "翻译中…", explain: "讲解中…" };
   let glossMode = "quick";
@@ -873,7 +938,7 @@
     }
   });
 
-  // ---------------------------------------------------------------- 逐句: sentence units, Chinese, 连续 / 一句一停
+  // ---------------------------------------------------------------- 逐句: sentence units, Chinese, 连续 / 单句循环
   const STOP_KEY = "kokoro-reader:stop";
   const zhPos = $("zh-pos"), zhHint = $("zh-hint"), zhText = $("zh-text"), zhBody = $("zh-body");
   const zhRetry = $("zh-retry"), zhToggle = $("zh-toggle"), modeCont = $("mode-cont"), modeStop = $("mode-stop");
@@ -888,9 +953,10 @@
     try { return localStorage.getItem(STOP_KEY) === "1"; } catch (e) { return false; }
   }
 
-  /** 连续 ⇄ 一句一停; takes effect on the sentence that is playing right now. */
+  /** 连续 ⇄ 单句循环; takes effect on the sentence that is playing right now. */
   function setStopMode(on, persist = true) {
     stopMode = on;
+    if (!on && loopTimer) { cancelLoop(); play(); } // in the breath: 连续 just reads on
     modeCont.setAttribute("aria-pressed", String(!on));
     modeStop.setAttribute("aria-pressed", String(on));
     if (persist) { try { localStorage.setItem(STOP_KEY, on ? "1" : "0"); } catch (e) { /* private mode */ } }
@@ -1061,7 +1127,7 @@
     renderFav();
   }
 
-  /** Make unit i current. 一句一停 always plays it; 连续 keeps playing if it was playing (paused stays paused). */
+  /** Make unit i current. 单句循环 always plays it; 连续 keeps playing if it was playing (paused stays paused). */
   function goUnit(i) {
     if (!units.length) { if (playable) jumpPara(i < u ? -1 : 1); return; }
     if (i >= units.length && ch && ch.next_idx !== null && ch.next_idx !== undefined) {
@@ -1069,29 +1135,37 @@
       return;
     }
     if (i < 0 || i >= units.length) { toast(i < 0 ? "已经是本章第一句" : "已经是全书最后一句"); return; }
-    const wasPlaying = playable && !au.paused;
+    const wasPlaying = playable && (!au.paused || !!loopTimer);
     u = i;
     unitEnd = null;
+    cancelLoop();
     paint();
     renderCard();
     scrollUnit();
     const x = units[u];
-    if (!playable || x.a === null) { if (wasPlaying) au.pause(); return; }
+    if (!playable || x.a === null) { if (wasPlaying) { au.pause(); setPlayIcon(false); } return; }
     if (stopMode || wasPlaying) playUnit();
     else seek(x.a);
   }
 
-  /** Play the current unit from its start (一句一停: up to its end). */
+  /** Play the current unit from its start (单句循环: up to its end, then again). */
   function playUnit(from) {
     const x = units[u];
     if (!playable || !x || x.a === null) return;
+    cancelLoop();
     unitEnd = stopMode ? x.b : null;
     seek(from ?? x.a);
     play();
   }
 
+  /** Stop: no next round of 单句循环 either (the button goes back to 播放). */
+  function stopLoop() {
+    if (loopTimer) { cancelLoop(); setPlayIcon(false); }
+  }
+
   function drillToggle() {
     if (!playable) return;
+    if (loopTimer) { stopLoop(); return; } // Space in the breath between two rounds stops too
     if (!au.paused) { au.pause(); return; }
     const x = units[u];
     if (!stopMode && x && x.a !== null && x.b !== null &&
@@ -1228,7 +1302,7 @@
     if (from === null || from === undefined) return;
     clickSeek = { time: au.currentTime, paused: au.paused, at: performance.now() };
     if (i >= 0) playUnit(from);
-    else { unitEnd = null; seek(from); play(); }
+    else { unitEnd = null; cancelLoop(); seek(from); play(); }
   }
 
   addEventListener("resize", () => renderCard());

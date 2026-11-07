@@ -10,6 +10,7 @@ const state = {
   books: [],
   queue: { current: null, pending: [] },
   readFrac: {},        // book id -> fraction of story text read
+  details: {},         // book id -> /api/books/{id} (chapters), for books that have been read
   uploads: [],         // file names currently being imported
   dragId: null,        // book id being dragged for reordering
   dragStartOrder: null,
@@ -21,14 +22,54 @@ function isBusy(id) {
   return (q.current && q.current.book_id === id) || q.pending.some(([b]) => b === id);
 }
 
+/** Under the cover: title, then "author · how far" (how much audio/中文 is prepared lives on the book page). */
 function metaHtml(book) {
   const frac = state.readFrac[book.id] || 0;
-  const busy = isBusy(book.id);
-  const dot = busy ? `<span class="busy-dot" title="正在准备"></span>` : "";
-  const pctText = frac > 0 ? `<span class="pct">${frac >= 0.995 ? "读完" : pct(frac) + "%"}</span>` : "";
-  const zh = book.translated ? `<div class="line sub">中文 ${book.translated}/${book.total} 章</div>` : "";
-  return `<div class="line"><span class="conv">${dot}音频 ${book.converted}/${book.total} 章</span>${pctText}</div>${zh}
-    <div class="read-bar"><i style="width:${(frac * 100).toFixed(1)}%"></i></div>`;
+  const dot = isBusy(book.id) ? `<span class="busy-dot" title="正在准备音频 / 中文"></span>` : "";
+  const how = frac >= 0.995 ? "读完" : pct(frac) >= 1 ? pct(frac) + "%" : book.progress ? "刚开始" : "未开始";
+  const sub = [book.author, how].filter(Boolean).map(escapeHtml).join(" · ");
+  const bar = pct(frac) >= 1 ? `<div class="read-bar"><i style="width:${(frac * 100).toFixed(1)}%"></i></div>` : "";
+  return `<div class="card-title">${escapeHtml(book.title)}</div><div class="card-sub">${dot}${sub}</div>${bar}`;
+}
+
+/* ---------- 继续阅读: the book read most recently, one click back into the reader ---------- */
+const heroEl = document.getElementById("continue");
+
+function heroBook() {
+  return state.books.filter((b) => b.progress)
+    .sort((x, y) => (y.read_at || 0) - (x.read_at || 0))[0] || null;
+}
+
+function heroHtml(book) {
+  const at = book.progress.chapter;
+  const href = `reader.html?book=${book.id}&ch=${at}`;
+  const chapters = state.details[book.id] ? state.details[book.id].chapters : [];
+  const ch = chapters.find((c) => c.idx === at);
+  const parts = [];
+  if (ch) {
+    // "Ch N" like the book page; a title like "CHAPTER 1" says nothing, so the chapter's first line instead
+    const n = ch.is_matter ? 0 : chapters.filter((c) => !c.is_matter && c.idx <= at).length;
+    const generic = !ch.title || /^\s*(chapter|ch\.?)?\s*[\divxlc]+\.?\s*$/i.test(ch.title);
+    const name = generic ? ch.first_line || "" : ch.title;
+    parts.push([n ? `Ch ${n}` : "", name].filter(Boolean).join(" · "));
+    const left = ch.duration ? ch.duration - (book.progress.time || 0) : null;
+    if (left > 0) parts.push(left < 60 ? "本章不到 1 分钟" : `本章还剩约 ${Math.ceil(left / 60)} 分钟`);
+  }
+  return `<a class="cont-cover cover-art" href="${href}" tabindex="-1" aria-hidden="true">${coverInner(book)}</a>
+    <div class="cont-info">
+      <div class="cont-lbl">继续阅读</div>
+      <div class="cont-title">${escapeHtml(book.title)}</div>
+      <div class="cont-sub">${parts.map(escapeHtml).join(" · ")}</div>
+    </div>
+    <a class="btn primary cont-go" href="${href}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>继续</a>`;
+}
+
+function renderContinue() {
+  const book = heroBook();
+  heroEl.hidden = !book;
+  if (!book) return;
+  const html = heroHtml(book);
+  if (heroEl.dataset.sig !== html) { heroEl.innerHTML = html; heroEl.dataset.sig = html; }
 }
 
 function cardHtml(book) {
@@ -48,6 +89,7 @@ function render() {
   grid.innerHTML = state.books.map(cardHtml).join("") + ghosts +
     `<button class="add-tile" type="button" id="add-tile"><span class="plus">＋</span>拖 EPUB 到这里<br>或点击上传</button>`;
   emptyNote.hidden = state.books.length > 0 || state.uploads.length > 0;
+  renderContinue();
 }
 
 function updateMetas() {
@@ -74,10 +116,12 @@ async function loadReadProgress() {
   await Promise.all(withProgress.map(async (b) => {
     try {
       const detail = await api.get(`/api/books/${b.id}`);
+      state.details[b.id] = detail;
       state.readFrac[b.id] = bookReadFraction(detail.chapters);
     } catch (e) { /* book vanished; next load fixes it */ }
   }));
   updateMetas();
+  renderContinue();
 }
 
 async function load() {
@@ -101,8 +145,15 @@ async function poll() {
   if (state.dragId || state.uploads.length) return;
   await fetchShelf();
   if (state.dragId || state.uploads.length) return;
-  if (sameOrder(state.books.map((b) => b.id))) updateMetas();
-  else { render(); loadReadProgress(); }
+  if (sameOrder(state.books.map((b) => b.id))) {
+    updateMetas();
+    renderContinue();
+    const h = heroBook(); // read in another tab: the new 继续阅读 needs its chapters
+    if (h && !state.details[h.id] && !state.loadingDetails) {
+      state.loadingDetails = true;
+      loadReadProgress().finally(() => { state.loadingDetails = false; });
+    }
+  } else { render(); loadReadProgress(); }
 }
 
 /* ---------- upload ---------- */

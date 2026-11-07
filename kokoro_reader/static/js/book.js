@@ -5,11 +5,12 @@ const bookId = new URLSearchParams(location.search).get("id") || "";
 const $ = (id) => document.getElementById(id);
 const els = {
   book: $("book"), missing: $("missing"), cover: $("cover"), title: $("title"), meta: $("meta"),
-  cont: $("continue"), voice: $("voice"), preview: $("preview"), prepare: $("prepare"),
+  cont: $("continue"), voice: $("voice"), voiceName: $("voice-name"), prepare: $("prepare"),
   list: $("chapters"), prep: $("prep"),
 };
 
-const VOICE_GROUPS = ["美式女声", "美式男声", "英式女声", "英式男声"];
+const VOICE_GROUPS = ["美式女声", "美式男声", "英式女声", "英式男声",
+  "微软 美式女声", "微软 美式男声", "微软 英式女声", "微软 英式男声"]; // 微软 = Edge Natural voices (online)
 const GENERIC_TITLE = /^\s*(chapter|ch\.?)?\s*([0-9]+|[ivxlcdm]+)\s*[.:]?\s*$/i;
 
 const state = {
@@ -62,11 +63,13 @@ function chapterState(ch) {
   if (cur && cur.book_id === bookId && cur.idx === ch.idx) return { cls: "run", text: `音频 ${pct(cur.progress)}%` };
   if (ch.status === "converting") return { cls: "run", text: "音频 0%" };
   if (ch.status === "queued") return { cls: "q", text: "排队中" };
-  if (ch.status === "error" || ch.zh === "error") return { cls: "err", text: "出错" };
+  if (ch.status === "error") return { cls: "err", text: "出错" };
+  if (ch.zh === "error") return { cls: "err", text: "翻译失败" };
   if (ch.read_ratio >= 0.98) return { cls: "ok", text: "✓ 已读完" };
   if (ch.read_ratio > 0) return { cls: "ok", text: `读到 ${pct(ch.read_ratio)}%` };
   if (ch.status === "done" && ch.zh === "done") return { cls: "ok", text: "已准备" };
-  if (ch.status === "done" && (ch.zh === "queued" || ch.zh === "running")) return { cls: "run", text: "准备中" };
+  if (ch.status === "done" && ch.zh === "running") return { cls: "run", text: `翻译 ${pct(ch.zh_progress || 0)}%` };
+  if (ch.status === "done" && ch.zh === "queued") return { cls: "q", text: "排队翻译" };
   return { cls: "none", text: "未准备" };
 }
 
@@ -108,7 +111,7 @@ function renderHeader() {
   }
   els.cont.hidden = !first && !prog;
 
-  if (!state.voiceSaving && els.voice.value !== b.voice) els.voice.value = b.voice;
+  if (!state.voiceSaving) showVoice(b.voice);
   renderPrep();
 }
 
@@ -137,44 +140,35 @@ function renderPrep() {
 }
 
 /* ---------- chapter list ---------- */
+/** The title is the way in: any chapter opens in the reader (an unprepared one reads as text first). */
 function titleHtml(ch) {
   const title = (ch.title || "").trim();
   const first = (ch.first_line || "").trim();
-  if (!title || GENERIC_TITLE.test(title)) return escapeHtml(first || title || "（无标题）");
-  return escapeHtml(title) + (first && first !== title ? ` <span class="first">· ${escapeHtml(first)}</span>` : "");
+  const inner = !title || GENERIC_TITLE.test(title) ? escapeHtml(first || title || "（无标题）")
+    : escapeHtml(title) + (first && first !== title ? ` <span class="first">· ${escapeHtml(first)}</span>` : "");
+  return `<a href="${readerHref(ch.idx)}">${inner}</a>`;
 }
 
 function opsHtml(ch) {
   const out = [];
-  const playable = ch.status === "done" || (ch.duration != null && ch.status !== "none");
   const failed = ch.status === "error" || ch.zh === "error";
   const busy = ch.status === "queued" || ch.status === "converting" || ch.zh === "queued" || ch.zh === "running";
   if (failed && !busy) out.push(`<button class="btn small" type="button" data-action="convert" title="重新准备这一章的音频和中文">重试</button>`);
   else if (!busy && (ch.status === "none" || ch.zh === "none")) {
     const x = estimateFor([ch]);
-    out.push(`<button class="btn small" type="button" data-action="convert" title="生成这一章的朗读音频 + 逐句中文${x ? "（" + estText(x) + "）" : ""}">准备</button>`);
+    out.push(`<button class="btn small hover-only" type="button" data-action="convert" title="生成这一章的朗读音频 + 逐句中文${x ? "（" + estText(x) + "）" : ""}">准备</button>`);
   }
   if (ch.status === "done" && ch.voice && ch.voice !== state.book.voice) {
     out.push(`<button class="btn small" type="button" data-action="reconvert" title="用 ${escapeHtml(voiceName(state.book.voice))} 重新生成这一章的音频">用新音色重录</button>`);
   }
-  if (playable) out.push(`<a class="btn small read-link" href="${readerHref(ch.idx)}">▶ 读</a>`);
   if (ch.is_matter) {
-    out.push(`<button class="btn small ghost switch-btn" type="button" data-action="set-story" title="把它当作正文（会计入章节和「准备整本书」）">设为正文</button>`);
+    out.push(`<button class="btn small ghost switch-btn hover-only" type="button" data-action="set-story" title="把它当作正文（会计入章节和「准备整本书」）">设为正文</button>`);
   } else {
     const open = state.openMenu === ch.idx;
     out.push(`<button class="row-menu-btn" type="button" data-action="menu" aria-label="更多操作" aria-expanded="${open}">⋯</button>`);
     if (open) out.push(`<div class="row-menu" role="menu"><button type="button" data-action="set-matter">设为非正文</button></div>`);
   }
   return out.join("");
-}
-
-function zhHtml(ch) {
-  if (ch.is_matter && ch.zh === "none") return `<span class="zh"></span>`;
-  if (ch.zh === "done") return `<span class="zh ok" title="逐句中文已就绪">中文</span>`;
-  if (ch.zh === "running") return `<span class="zh run">翻译 ${pct(ch.zh_progress || 0)}%</span>`;
-  if (ch.zh === "queued") return `<span class="zh q">排队翻译</span>`;
-  if (ch.zh === "error") return `<span class="zh err" title="翻译失败，点这一行的「重试」">翻译失败</span>`;
-  return `<span class="zh"></span>`;
 }
 
 /** The pieces of one chapter row: its classes and each cell's inner HTML. */
@@ -192,7 +186,6 @@ function rowParts(ch, nums) {
       ttl: titleHtml(ch),
       dur: showDur ? fmtDuration(ch.duration) : "",
       "tag-cell": `<span class="tag ${st.cls}">${st.text}</span>`,
-      "zh-cell": zhHtml(ch),
       ops: opsHtml(ch),
     },
   };
@@ -206,9 +199,8 @@ function rowHtml(ch, nums) {
     `<span class="num">${c.num}</span>` +
     `<span class="ttl" title="${escapeHtml(tip)}">${c.ttl}</span>` +
     `<span class="dur">${c.dur}</span>` +
-    `<span class="tag-cell">${c["tag-cell"]}</span>` +
-    `<span class="zh-cell">${c["zh-cell"]}</span>` +
-    `<span class="ops">${c.ops}</span></div>`;
+    `<span class="ops">${c.ops}</span>` +
+    `<span class="tag-cell">${c["tag-cell"]}</span></div>`;
 }
 
 /** Poll updates touch only the cells that changed, so a button or link under the pointer (or
@@ -365,23 +357,94 @@ els.prepare.addEventListener("click", () => act(async () => {
   }
 }));
 
-/* ---------- voice + preview ---------- */
+/* ---------- voice picker: a dialog where a click plays that voice's 试听 and 确定 keeps it ---------- */
+const voiceDlg = $("voice-dlg"), voiceBody = $("voice-body"), voiceCur = $("voice-cur");
+let picked = null;        // the voice chosen in the open dialog (saved only on 确定)
+let previewing = null;    // the voice whose 试听 is loading / playing
+
+const groupOf = (v) => `${v.engine === "edge" ? "微软 " : ""}${v.accent}${v.gender}声`;
+
+function showVoice(id) {
+  const name = voiceName(id);
+  if (els.voiceName.textContent !== name) els.voiceName.textContent = name;
+}
+
 function fillVoices() {
   const groups = new Map(VOICE_GROUPS.map((g) => [g, []]));
   for (const v of state.voices) {
-    const g = `${v.accent}${v.gender}声`;
+    const g = groupOf(v);
     if (!groups.has(g)) groups.set(g, []);
-    const name = v.label.split("（")[0] + (v.id === "af_heart" ? "（默认）" : "");
-    groups.get(g).push(`<option value="${v.id}">${escapeHtml(name)}</option>`);
+    groups.get(g).push(`<button type="button" class="voice-opt" data-voice="${escapeHtml(v.id)}" aria-pressed="false">` +
+      `<span class="nm">${escapeHtml(v.label.split("（")[0])}</span>${v.default ? "<small>默认</small>" : ""}</button>`);
   }
-  els.voice.innerHTML = [...groups].filter(([, opts]) => opts.length)
-    .map(([g, opts]) => `<optgroup label="${g}">${opts.join("")}</optgroup>`).join("");
+  voiceBody.innerHTML = [...groups].filter(([, opts]) => opts.length)
+    .map(([g, opts]) => `<section class="voice-group"><h3>${g}</h3><div class="voice-grid">${opts.join("")}</div></section>`)
+    .join("");
 }
 
-els.voice.addEventListener("change", async () => {
-  const voice = els.voice.value;
+function voiceOpts() { return voiceBody.querySelectorAll(".voice-opt"); }
+
+function markVoices() {
+  for (const b of voiceOpts()) {
+    b.setAttribute("aria-pressed", String(b.dataset.voice === picked));
+    b.classList.toggle("loading", b.dataset.voice === previewing && previewAudio.paused);
+    b.classList.toggle("playing", b.dataset.voice === previewing && !previewAudio.paused);
+  }
+  const v = state.voices.find((x) => x.id === picked);
+  voiceCur.textContent = v ? `已选：${voiceName(v.id)}（${groupOf(v)}）` : "";
+}
+
+const previewAudio = new Audio();
+function playPreview(id) {
+  previewing = id;
+  previewAudio.src = `/api/voices/${encodeURIComponent(id)}/preview.mp3`;
+  previewAudio.play().catch(() => {});
+  markVoices();
+}
+function stopPreview() {
+  previewing = null;
+  previewAudio.pause();
+  previewAudio.removeAttribute("src");
+  markVoices();
+}
+previewAudio.addEventListener("playing", markVoices);
+previewAudio.addEventListener("ended", stopPreview);
+previewAudio.addEventListener("error", () => {
+  if (!previewAudio.getAttribute("src")) return;
+  toast("试听生成失败，请稍后再试", "error");
   stopPreview();
+});
+
+voiceBody.addEventListener("click", (e) => {
+  const b = e.target.closest(".voice-opt");
+  if (!b) return;
+  const id = b.dataset.voice;
+  if (id === picked && id === previewing) { stopPreview(); return; } // a second click stops it
+  picked = id;
+  playPreview(id);
+});
+
+els.voice.addEventListener("click", () => {
+  if (!state.book) return;
+  picked = state.book.voice;
+  markVoices();
+  voiceDlg.showModal();
+  const cur = voiceBody.querySelector('.voice-opt[aria-pressed="true"]');
+  if (cur) cur.scrollIntoView({ block: "nearest" });
+});
+voiceDlg.addEventListener("close", stopPreview); // 取消 / Esc / 确定 all end the 试听
+voiceDlg.addEventListener("click", (e) => { // a click on the backdrop = 取消
+  if (e.target !== voiceDlg) return;
+  const r = voiceDlg.getBoundingClientRect();
+  if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) voiceDlg.close();
+});
+$("voice-cancel").addEventListener("click", () => voiceDlg.close());
+$("voice-ok").addEventListener("click", async () => {
+  const voice = picked;
+  voiceDlg.close();
+  if (!voice || voice === state.book.voice) return;
   state.voiceSaving = true;
+  showVoice(voice);
   try {
     await api.put(`/api/books/${bookId}/voice`, { voice });
     toast(`音色已换成 ${voiceName(voice)}，之后准备的章节会用它`);
@@ -390,30 +453,6 @@ els.voice.addEventListener("change", async () => {
   }
   state.voiceSaving = false;
   await refresh().catch(() => {});
-});
-
-const previewAudio = new Audio();
-function resetPreviewBtn() { els.preview.textContent = "🔈 试听"; }
-function stopPreview() {
-  previewAudio.pause();
-  previewAudio.removeAttribute("src");
-  resetPreviewBtn();
-}
-previewAudio.addEventListener("playing", () => { els.preview.textContent = "⏹ 停止"; });
-previewAudio.addEventListener("ended", stopPreview);
-previewAudio.addEventListener("error", () => {
-  if (!previewAudio.getAttribute("src")) return;
-  toast("试听生成失败，请稍后再试", "error");
-  stopPreview();
-});
-els.preview.addEventListener("click", () => {
-  if (previewAudio.getAttribute("src")) {
-    stopPreview();
-    return;
-  }
-  els.preview.textContent = "⏳ 生成中…";
-  previewAudio.src = `/api/voices/${encodeURIComponent(els.voice.value)}/preview.mp3`;
-  previewAudio.play().catch(() => {});
 });
 
 /* ---------- go ---------- */

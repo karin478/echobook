@@ -24,7 +24,9 @@ def test_shelf_upload_shows_cover_card(page: Page, live_server, sample_epub):
     expect(cards(page)).to_have_count(1)
     card = cards(page).first
     expect(card).to_contain_text("The Sample Book")
-    expect(card).to_contain_text("音频 0/5 章")
+    expect(card.locator(".card-title")).to_have_text("The Sample Book")
+    expect(card.locator(".card-sub")).to_have_text("Ada Writer · 未开始")
+    expect(card).not_to_contain_text("音频")  # how much is prepared is the book page's business
     book_id = live_server.api("GET", "/api/books")[0]["id"]
     expect(card.locator("a.cover")).to_have_attribute("href", f"book.html?id={book_id}")
     # the card survives a reload (it really is on the server)
@@ -134,3 +136,54 @@ def test_shelf_delete_offers_audio_only_or_the_whole_book(page: Page, live_serve
     expect(cards(page)).to_have_count(0)
     assert live_server.api("GET", "/api/books") == []
     assert [v["id"] for v in live_server.api("GET", "/api/vocab")] == [vocab["id"]]
+
+
+def read_to(live_server, book_id: str, chapter: int, ratio: float):
+    live_server.api("PUT", f"/api/books/{book_id}/progress",
+                    {"chapter": chapter, "para": 0, "word": 0, "time": 1.0, "ratio": ratio})
+
+
+def test_continue_reading_is_the_last_book_read(page: Page, live_server, make_book):
+    a = live_server.upload(make_book("Alpha", "Ann"))["id"]
+    b = live_server.upload(make_book("Beta", "Bob"))["id"]
+    open_shelf(page, live_server)
+    expect(cards(page)).to_have_count(2)
+    expect(page.locator("#continue")).to_be_hidden()  # nothing read yet
+
+    read_to(live_server, a, 1, 0.5)
+    read_to(live_server, b, 2, 0.25)
+    page.reload()
+    hero = page.locator("#continue")
+    expect(hero).to_be_visible()
+    expect(hero).to_contain_text("继续阅读")
+    expect(hero).to_contain_text("Beta")
+    expect(hero.locator(".cont-sub")).to_contain_text("Ch 2 · ")  # "Chapter 2" says nothing: first line instead
+    expect(hero.locator(".cont-sub")).not_to_contain_text("Chapter 2")
+    expect(hero.get_by_role("link", name="继续")).to_have_attribute("href", f"reader.html?book={b}&ch=2")
+    # the card under the cover: title, author · how far
+    beta = page.locator(f'.book-card[data-id="{b}"]')
+    expect(beta.locator(".card-sub")).to_contain_text("Bob · ")
+    expect(beta.locator(".card-sub")).to_contain_text("%")
+
+    read_to(live_server, a, 1, 0.6)
+    read_to(live_server, a, 3, 0.001)  # a sliver of a chapter: 刚开始, not "0%"
+    page.reload()
+    expect(page.locator(f'.book-card[data-id="{a}"] .card-sub')).to_have_text("Ann · 12%")
+    expect(hero).to_contain_text("Alpha")
+    expect(hero.get_by_role("link", name="继续")).to_have_attribute("href", f"reader.html?book={a}&ch=3")
+
+
+def test_only_one_accent_button_when_there_is_something_to_continue(page: Page, live_server, sample_epub):
+    bid = live_server.upload(sample_epub)["id"]
+    read_to(live_server, bid, 1, 0.1)
+    open_shelf(page, live_server)
+    expect(page.locator("#continue")).to_be_visible()
+    expect(page.get_by_role("button", name="＋ 上传 EPUB")).not_to_have_class("btn primary")
+    assert page.locator(".btn.primary:visible").count() == 1  # 继续 is the one
+
+
+def test_a_sliver_read_says_just_started(page: Page, live_server, sample_epub):
+    bid = live_server.upload(sample_epub)["id"]
+    read_to(live_server, bid, 1, 0.001)
+    open_shelf(page, live_server)
+    expect(cards(page).first.locator(".card-sub")).to_have_text("Ada Writer · 刚开始")
