@@ -120,6 +120,20 @@ function glossHtml(text) {
   return html;
 }
 
+/** The ▸ blocks of a 讲解 as {head, block}: block = the head line + its own lines (no 注意). */
+function glossUnits(text) {
+  const out = [];
+  let cur = null;
+  for (const raw of String(text ?? "").split("\n")) {
+    const l = raw.trim();
+    if (!l) continue;
+    if (l.startsWith("▸")) { cur = { head: l.slice(1).trim(), lines: [l] }; out.push(cur); }
+    else if (l.startsWith("注意：")) cur = null;
+    else if (cur) cur.lines.push(l);
+  }
+  return out.map((u) => ({ head: u.head, block: u.lines.join("\n") }));
+}
+
 function fmtDuration(sec) {
   if (sec == null) return "";
   const s = Math.round(sec);

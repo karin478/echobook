@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 import uuid
 
@@ -62,6 +63,43 @@ def _locate(store: Store, library: Library, book_id: str, chapter: int, para: in
             "s_start": s_start, "s_end": s_end}
 
 
+# 讲解逐条收藏: a ▸ head is the chunk as the model wrote it — maybe with a "(lemma)" note, sb/sth
+# placeholders, straight apostrophes, or "..." between the parts of a split pattern.
+_PLACEHOLDERS = {"sb", "sth", "sb's", "sth's", "someone", "somebody", "something", "one's", "oneself"}
+_APOS = "['’]"
+
+
+def _piece_re(piece: str) -> str | None:
+    words = [w for w in piece.split() if w.lower().replace("’", "'") not in _PLACEHOLDERS]
+    if not words:
+        return None
+    pat = r"\s+".join(_APOS.join(re.escape(x) for x in re.split(_APOS, w)) for w in words)
+    return rf"(?<![\w’']){pat}(?![\w’'])"
+
+
+def find_unit(sentence: str, head: str, near: tuple[int, int] | None = None):
+    """Where a 讲解 unit head sits in ``sentence``: (start, end, text as in the book) or None.
+    A split pattern gives the span from its first part to its last, text "a ... b". With ``near``,
+    the occurrence overlapping that range wins over the first one."""
+    bare = re.sub(r"\s*[(（][^)）]*[)）]", " ", head)
+    parts = [r for r in (_piece_re(x) for x in re.split(r"\.\.\.|…", bare)) if r]
+    if not parts:
+        return None
+    rx = re.compile(r"(.*?)".join(f"({x})" for x in parts), re.I | re.S)
+    found = []
+    pos = 0
+    while (m := rx.search(sentence, pos)):
+        found.append(m)
+        pos = m.start() + 1
+    if not found:
+        return None
+    m = found[0]
+    if near:
+        m = next((x for x in found if x.start() < near[1] and x.end() > near[0]), m)
+    text = " ... ".join(m.group(2 * i + 1) for i in range(len(parts)))
+    return m.start(), m.end(), text
+
+
 CONTEXT_CHARS = 600  # either side of the sentence: enough to disambiguate, cheap to send
 
 
@@ -85,10 +123,11 @@ def selection_context(store: Store, library: Library, book_id: str, chapter: int
 def save_vocab(store: Store, library: Library, book_id: str, chapter: int, para: int,
                start_char: int, end_char: int, whole: bool = False,
                zh: str | None = None, gloss: str | None = None,
-               gloss_mode: str | None = None) -> dict:
+               gloss_mode: str | None = None, unit: str | None = None) -> dict:
     """Save a selection. ``whole``: the selection is itself the sentence unit to keep (收藏本句),
     otherwise the containing sentence is looked up. ``zh``: the Chinese of that sentence, if known.
-    ``gloss``: the 划词 翻译 / 讲解 shown for the selection (``gloss_mode`` says which)."""
+    ``gloss``: the 划词 翻译 / 讲解 shown for the selection (``gloss_mode`` says which).
+    ``unit``: the ▸ head of one 讲解 block — the entry becomes that chunk of the sentence."""
     loc = _locate(store, library, book_id, chapter, para, start_char, end_char, whole)
     book, tokens, ptext = loc["book"], loc["tokens"], loc["ptext"]
     start, end, s_start, s_end = loc["start"], loc["end"], loc["s_start"], loc["s_end"]
@@ -96,6 +135,12 @@ def save_vocab(store: Store, library: Library, book_id: str, chapter: int, para:
     converted = tokens is not None and audio.exists()
     text = ptext[start:end]
     sentence = ptext[s_start:s_end]
+    if unit and unit.strip():
+        hit = find_unit(sentence, unit, near=(start - s_start, end - s_start))
+        if hit:
+            start, end, text = s_start + hit[0], s_start + hit[1], hit[2]
+        else:  # not literally in the sentence (another form of the word): keep the selection's place
+            text = re.sub(r"\s*[(（][^)）]*[)）]", "", unit).strip()
 
     start_ts = end_ts = sent_a = sent_b = None
     if converted:

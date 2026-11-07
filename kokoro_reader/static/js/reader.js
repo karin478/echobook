@@ -723,6 +723,7 @@
       const SRC = { google: "Google", mymemory: "MyMemory" }; // free machine translation, not the model
       popBody.innerHTML = glossHtml(r.result) + (SRC[r.source] ? `<span class="g-src">${SRC[r.source]}</span>` : "");
       popBody.className = "g-body" + (popBody.querySelector(".g-unit") ? " units" : "");
+      addUnitStars(v, r.result);
       placePop();
     }, (e) => {
       if (seq !== glossSeq) return;
@@ -730,6 +731,48 @@
       popBody.className = "g-body err";
       placePop();
     });
+  }
+
+  // 讲解逐条收藏: each ▸ block gets its own ☆ — that chunk alone (with just its block) goes into
+  // 生词本, and the popup stays open for the next one.
+  const STAR_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.6l2.6 5.3 5.8.85-4.2 4.1 1 5.8L12 16.9l-5.2 2.75 1-5.8-4.2-4.1 5.8-.85z"/></svg>';
+  function addUnitStars(v, result) {
+    const blocks = glossUnits(result);
+    popBody.querySelectorAll(".g-unit").forEach((el, i) => {
+      const u = blocks[i];
+      if (!u) return;
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "g-save";
+      b.setAttribute("aria-label", `收藏「${u.head}」`);
+      b.setAttribute("aria-pressed", "false");
+      b.title = "只收藏这一条（连同这段讲解）";
+      b.innerHTML = STAR_SVG;
+      b.addEventListener("click", async () => {
+        if (b.disabled) return;
+        b.disabled = true;
+        try {
+          const rec = await api.post("/api/vocab", {
+            book_id: bookId, chapter: v.chapter, para: v.para, start_char: v.start, end_char: v.end,
+            zh: sentenceZh(v), gloss: u.block, gloss_mode: "explain", unit: u.head,
+          });
+          b.setAttribute("aria-pressed", "true");
+          b.title = "已收藏这一条";
+          toast(`已收藏：${rec.text}`);
+        } catch (e) {
+          b.disabled = false;
+          toast(e.message, "error");
+        }
+      });
+      el.querySelector(".g-head").appendChild(b);
+    });
+  }
+
+  /** The Chinese of the sentence a selection starts in, when it is known. */
+  function sentenceZh(v) {
+    const j = v.chapter === unitsIdx ? unitAt(v.para, v.start) : -1;
+    const x = j >= 0 ? units[j] : null;
+    return x && x.p === v.para && x.start <= v.start && v.start < x.end ? x.zh : null;
   }
 
   /** 智能扩选: the server grew the selection (whole word / phrasal verb) — show and keep that range. */
@@ -814,9 +857,7 @@
       clearTimeout(glossTimer);
       if (!glossReq && !gloss) lookup(v); // clicked before the lookup even started
       await glossReq;
-      const j = v.chapter === unitsIdx ? unitAt(v.para, v.start) : -1;
-      const x = j >= 0 ? units[j] : null;
-      const zh = x && x.p === v.para && x.start <= v.start && v.start < x.end ? x.zh : null;
+      const zh = sentenceZh(v);
       const rec = await api.post("/api/vocab", {
         book_id: bookId, chapter: v.chapter, para: v.para, start_char: v.start, end_char: v.end, zh,
         gloss: gloss ? gloss.result : null, gloss_mode: gloss ? gloss.mode : null,

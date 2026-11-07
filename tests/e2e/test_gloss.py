@@ -118,3 +118,48 @@ def test_a_partial_word_grows_to_the_whole_word_and_is_saved_whole(page: Page, l
     page.get_by_role("button", name="⭐ 收藏").click()
     expect(page.locator(".toasts")).to_contain_text("已收藏：louder")
     assert live_server.api("GET", "/api/vocab")[0]["text"] == "louder"
+
+
+UNITS = ("她又喊了一声，这次更大声。\n"
+         "▸ called again (call)\n  又喊了一次。\n  例：He called again. —— 他又打来了。\n"
+         "▸ this time\n  这一次；和上一次对比。\n  例：Try harder this time. —— 这次再努力点。\n"
+         "注意：louder 是比较级。")
+
+
+def test_each_explained_unit_can_be_saved_on_its_own(page: Page, live_server, book):
+    """☆ on a ▸ block saves just that chunk (with its block) — the popup stays for the next one."""
+    convert(live_server, book, 0)
+    page.route("**/api/lookup", lambda route: route.fulfill(
+        json={"mode": "explain", "text": LOUDER, "result": UNITS, "source": "model"}))
+    open_reader(page, live_server, book, 0)
+    ready(page)
+    page.get_by_role("button", name="讲解", exact=True).click()
+    page.evaluate(SELECT_JS, [1, "called", 1, "louder", False])
+    body = page.locator("#gloss-body")
+    expect(body.locator(".g-unit")).to_have_count(2)
+    save = body.get_by_role("button", name="收藏「this time」")
+    save.click()
+    expect(page.locator(".toasts")).to_contain_text("已收藏：this time")
+    expect(page.locator("#gloss-pop")).to_be_visible()
+    expect(save).to_have_attribute("aria-pressed", "true")
+    expect(save).to_be_disabled()
+    (rec,) = live_server.api("GET", "/api/vocab")
+    assert rec["text"] == "this time" and rec["gloss_mode"] == "explain"
+    assert rec["gloss"] == "▸ this time\n这一次；和上一次对比。\n例：Try harder this time. —— 这次再努力点。"
+    assert rec["sentence"] == LOUDER
+
+    body.get_by_role("button", name="收藏「called again (call)」").click()
+    expect(page.locator(".toasts")).to_contain_text("已收藏：called again")
+    assert [r["text"] for r in live_server.api("GET", "/api/vocab")] == ["called again", "this time"]
+    # the vocab page shows each as its own entry with only its block
+    page.goto(f"{live_server.url}/vocab.html")
+    expect(page.locator(".vocab-item .gloss .g-unit .g-head")).to_have_text(["called again (call)", "this time"])
+
+
+def test_a_translation_has_no_unit_stars(page: Page, live_server, book):
+    convert(live_server, book, 0)
+    open_reader(page, live_server, book, 0)
+    ready(page)
+    page.evaluate(SELECT_JS, [1, "louder", 1, "louder", False])
+    expect(page.locator("#gloss-body")).to_have_text("【翻译】louder")
+    expect(page.locator("#gloss-body .g-save")).to_have_count(0)

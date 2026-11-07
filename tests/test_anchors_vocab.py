@@ -215,3 +215,64 @@ def test_save_word_keeps_chinese_of_its_sentence(env):
     assert rec["kind"] == "word" and rec["zh"] == "班纳特先生没有回答。"
     plain = save_vocab(store, lib, bid, 0, para, s, s + 9)
     assert plain["zh"] is None
+
+
+# ---------------------------------------------------------------- 讲解逐条收藏: one ▸ unit of a 讲解 as its own entry
+from kokoro_reader.vocab import find_unit  # noqa: E402
+
+GRIN = "He gave me a grin, as if he were actively rooting for gravity. I’d never seen anything quite like it."
+
+
+@pytest.mark.parametrize("head,expect", [
+    ("actively rooting for (root for)", "actively rooting for"),   # the lemma note is not in the book
+    ("As If", "as if"),                                           # book casing kept
+    ("he were (be)", "he were"),
+    ("I'd", "I’d"),                                              # straight vs curly apostrophe
+    ("root for sb", None),                                        # different form: not found
+    ("rooting for sb", "rooting for"),                            # sb / sth placeholders dropped
+    ("never ... anything quite like it", "never ... anything quite like it"),  # non-contiguous
+    ("gravity", "gravity"),
+    ("grin", "grin"),                                             # whole words only: not "grin" in "grinned"
+    ("ave", None),
+])
+def test_find_unit_in_sentence(head, expect):
+    got = find_unit(GRIN, head)
+    if expect is None:
+        assert got is None
+        return
+    a, b, text = got
+    assert text == expect
+    first = expect.split(" ... ")[0]
+    last = expect.split(" ... ")[-1]
+    assert GRIN[a:a + len(first)] == first and GRIN[b - len(last):b] == last
+
+
+def test_find_unit_prefers_the_occurrence_in_the_selection():
+    s = "Time after time, she said it was time."
+    assert find_unit(s, "time", near=(30, 38))[:2] == (33, 37)
+    assert find_unit(s, "time")[:2] == (0, 4)  # case-insensitive: "Time" comes first
+    assert find_unit(s, "time", near=(11, 15))[:3] == (11, 15, "time")
+
+
+def test_save_one_unit_of_an_explanation(env):
+    """☆ on one ▸ block of a 讲解 saves that chunk, at its own place in the sentence, with its block."""
+    store, lib, bid = env
+    convert(env)
+    para = _idx(env, P1)
+    s = P1.index("Mr.")
+    block = "▸ made no answer (make no answer)\n没有回答。\n例：She made no answer. —— 她没有回答。"
+    rec = save_vocab(store, lib, bid, 0, para, s, len(P1), zh="班纳特先生没有回答。",
+                     gloss=block, gloss_mode="explain", unit="made no answer (make no answer)")
+    assert rec["kind"] == "word" and rec["text"] == "made no answer"
+    assert P1[rec["start_char"]:rec["end_char"]] == "made no answer"
+    assert rec["sentence"] == "Mr. Bennet made no answer."
+    assert rec["gloss"] == block and rec["gloss_mode"] == "explain" and rec["zh"] == "班纳特先生没有回答。"
+    assert rec["sentence_start_ts"] <= rec["start_ts"] < rec["end_ts"] <= rec["sentence_end_ts"]
+
+
+def test_save_unit_not_found_keeps_the_selection_place_and_the_unit_text(env):
+    store, lib, bid = env
+    para = _idx(env, P1)
+    s = P1.index("no answer")
+    rec = save_vocab(store, lib, bid, 0, para, s, s + 9, unit="make no reply (sb)")
+    assert rec["text"] == "make no reply" and (rec["start_char"], rec["end_char"]) == (s, s + 9)

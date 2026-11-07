@@ -87,6 +87,17 @@ def test_saving_a_selection_keeps_its_gloss(lctx):
     assert plain["gloss"] is None and plain["gloss_mode"] is None
 
 
+
+def test_saving_one_unit_of_an_explanation(lctx):
+    """讲解逐条收藏: the ☆ on one ▸ block sends that block and its head; the entry is that chunk."""
+    client, fake, bid = lctx
+    block = "▸ keeps going (keep doing)\n一直继续。"
+    rec = client.post("/api/vocab", json={"book_id": bid, "chapter": 0, "para": 0, "start_char": 0,
+                                           "end_char": len(SENT), "gloss": block, "gloss_mode": "explain",
+                                           "unit": "keeps going (keep doing)"}).json()
+    assert rec["text"] == "keeps going" and SENT[rec["start_char"]:rec["end_char"]] == "keeps going"
+    assert rec["gloss"] == block
+
 def test_real_client_prompts(monkeypatch):
     seen = []
 

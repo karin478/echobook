@@ -81,6 +81,7 @@ class VocabBody(BaseModel):
     zh: str | None = None
     gloss: str | None = None
     gloss_mode: Literal["quick", "explain"] | None = None
+    unit: str | None = None  # 讲解逐条收藏: the ▸ head of the one block being saved
 
 
 class LookupBody(BaseModel):
@@ -427,7 +428,7 @@ def create_app(home: Path, synth: Synthesizer, start_worker: bool = True,
         try:
             return save_vocab(store, library, body.book_id, body.chapter, body.para,
                               body.start_char, body.end_char, whole=body.whole, zh=body.zh,
-                              gloss=body.gloss, gloss_mode=body.gloss_mode)
+                              gloss=body.gloss, gloss_mode=body.gloss_mode, unit=body.unit)
         except (ValueError, IndexError, FileNotFoundError) as e:
             raise HTTPException(400, str(e) or "选区不合法")
 
