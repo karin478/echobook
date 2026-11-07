@@ -138,6 +138,13 @@ def test_each_explained_unit_can_be_saved_on_its_own(page: Page, live_server, bo
     body = page.locator("#gloss-body")
     expect(body.locator(".g-unit")).to_have_count(2)
     save = body.get_by_role("button", name="收藏「this time」")
+    # the ☆ sits right after the chunk's words, not pushed to the far edge of the row
+    gap = page.evaluate("""(b) => {
+      const head = b.closest('.g-head'), t = head.firstChild, r = document.createRange();
+      r.selectNodeContents(t);
+      return b.getBoundingClientRect().left - r.getBoundingClientRect().right;
+    }""", save.element_handle())
+    assert 0 <= gap <= 12, gap
     save.click()
     expect(page.locator(".toasts")).to_contain_text("已收藏：this time")
     expect(page.locator("#gloss-pop")).to_be_visible()
