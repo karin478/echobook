@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>生词本 · Echobook</title>
+<link rel="icon" href="icon.svg?v=1" type="image/svg+xml">
+<link rel="stylesheet" href="css/app.css?v=9">
+<script src="js/theme.js?v=9"></script>
+</head>
+<body>
+<main class="wrap vocab-page">
+  <div class="page-top"><a class="back" href="shelf.html">← 书架</a><span class="theme-slot"></span></div>
+  <header class="vocab-head">
+    <h1>生词本</h1>
+    <div class="vocab-meta"><span id="count"></span></div>
+  </header>
+  <div class="anki-bar" id="anki-bar" aria-live="polite"><span class="anki-msg">正在连接 Anki…</span></div>
+  <section id="list" class="vocab-list" aria-label="生词列表"></section>
+  <p id="empty" class="empty-note" hidden>还没有收藏。在阅读页划选文字，在弹出的翻译/讲解里点 ⭐ 收藏，或按 F / 点中文那行末尾的 ☆ 收藏整句（连中文一起）。</p>
+</main>
+<audio id="clip" preload="none"></audio>
+<script src="js/api.js?v=9"></script>
+<script src="js/vocab.js?v=9"></script>
+</body>
+</html>

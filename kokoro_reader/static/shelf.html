@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>我的书架 · Echobook</title>
+<link rel="icon" href="icon.svg?v=1" type="image/svg+xml">
+<link rel="stylesheet" href="css/app.css?v=9">
+<script src="js/theme.js?v=9"></script>
+</head>
+<body>
+<main class="wrap">
+  <header class="topbar">
+    <div>
+      <div class="brand"><img class="logo" src="icon.svg?v=1" alt="" width="22" height="22">Echobook 回声书</div>
+      <h1>我的书架</h1>
+    </div>
+    <div class="tools">
+      <span class="theme-slot"></span>
+      <a class="btn ghost" href="vocab.html">生词本</a>
+      <button class="btn primary" id="upload-btn" type="button">＋ 上传 EPUB</button>
+      <input id="file-input" type="file" accept=".epub,application/epub+zip" multiple hidden>
+    </div>
+  </header>
+
+  <section id="grid" class="grid" aria-label="书架"></section>
+  <p id="empty-note" class="empty-note" hidden>书架还是空的。把 EPUB 拖进这个页面，或点右上角「＋ 上传 EPUB」。</p>
+</main>
+
+<div id="drop-overlay" class="drop-overlay" hidden>
+  <div class="drop-box">
+    <div class="icon">📥</div>
+    <div class="big">松开即上传</div>
+    <div class="small">可以一次拖入多本 EPUB</div>
+  </div>
+</div>
+
+<script src="js/api.js?v=9"></script>
+<script src="js/shelf.js?v=9"></script>
+</body>
+</html>

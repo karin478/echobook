@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-CN" class="reader-root">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Echobook</title>
+<link rel="icon" href="icon.svg?v=1" type="image/svg+xml">
+<link rel="stylesheet" href="css/app.css?v=9">
+<script src="js/theme.js?v=9"></script>
+<script src="js/reading.js?v=9"></script>
+</head>
+<body class="reader drilling">
+<header class="r-top">
+  <div class="in">
+    <a class="back" id="back" href="shelf.html">← 章节页</a>
+    <span class="book-name" id="book-name"></span>
+    <div class="seg" role="group" aria-label="播放方式（S 切换）" title="播放方式（S 切换）">
+      <button type="button" id="mode-cont" aria-pressed="true">连续</button>
+      <button type="button" id="mode-stop" aria-pressed="false">一句一停</button>
+    </div>
+    <span class="typo-slot"></span>
+    <span class="theme-slot"></span>
+  </div>
+</header>
+
+<main class="reader-main">
+  <h1 id="ch-title"></h1>
+  <div class="reader-banner" id="banner" role="status" hidden>
+    <span class="msg" id="banner-msg"></span>
+    <button class="btn small primary" id="banner-btn" type="button" hidden></button>
+  </div>
+  <article id="text" lang="en"></article>
+  <nav class="ch-nav" id="ch-nav" hidden>
+    <a class="btn" id="prev-ch" href="#" hidden>← 上一章</a>
+    <a class="btn" id="next-ch" href="#" hidden>下一章 →</a>
+  </nav>
+  <div class="not-found" id="missing" hidden>
+    <h2>找不到这一章</h2>
+    <p>它可能已经被删除了。<a href="shelf.html">回到书架</a></p>
+  </div>
+</main>
+
+<!-- the current unit's Chinese; the script places it right under the current paragraph -->
+<div class="zh-text" id="zh-text" lang="zh-CN" hidden>
+  <span class="zh-body" id="zh-body" aria-live="polite"></span>
+  <button class="zh-fav" id="fav" type="button" aria-label="收藏本句" title="收藏本句：英文 + 中文进生词本（F）" aria-pressed="false">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.6l2.6 5.3 5.8.85-4.2 4.1 1 5.8L12 16.9l-5.2 2.75 1-5.8-4.2-4.1 5.8-.85z"/></svg>
+  </button>
+</div>
+
+<!-- 划词 popup: the selection's 翻译 / 讲解 (mode = the switch next to 中文) and ⭐ to save it -->
+<div class="gloss-pop" id="gloss-pop" hidden>
+  <div class="g-body" id="gloss-body" lang="zh-CN" aria-live="polite"></div>
+  <button class="star-btn" id="star" type="button">⭐ 收藏</button>
+</div>
+
+<div class="dock" id="dock">
+  <div class="zh-card" id="zh-card">
+    <span class="zh-pos" id="zh-pos"></span>
+    <span class="zh-hint" id="zh-hint"></span>
+    <button class="btn small" id="zh-retry" type="button" hidden>重试</button>
+    <button class="chip" id="zh-toggle" type="button" title="显示 / 隐藏中文（↓）" aria-pressed="true">中文<kbd>↓</kbd></button>
+    <div class="seg gloss-seg" role="group" aria-label="划词（T 切换）" title="划选文字后自动给出：翻译 / AI 讲解（T 切换）">
+      <span class="seg-lbl">划词</span>
+      <button type="button" id="gloss-quick" aria-pressed="true">翻译</button>
+      <button type="button" id="gloss-explain" aria-pressed="false">讲解</button>
+    </div>
+  </div>
+  <div class="reader-bar" id="bar" hidden>
+    <div class="transport">
+      <button class="icon-btn" id="prev" type="button" title="上一句（←）" aria-label="上一句">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5h2v14H6zM20 5v14L9.5 12z"/></svg>
+      </button>
+      <button class="play-btn" id="play" type="button" aria-label="播放">
+        <svg class="i-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+        <svg class="i-pause" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg>
+      </button>
+      <button class="icon-btn" id="next" type="button" title="下一句（→）" aria-label="下一句">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16 5h2v14h-2zM4 5v14l10.5-7z"/></svg>
+      </button>
+    </div>
+    <div class="seek">
+      <input id="prog" type="range" min="0" max="1000" value="0" aria-label="播放进度">
+      <span id="time">0:00 / 0:00</span>
+    </div>
+    <label class="speed" title="语速（[ 和 ] 键 ±0.05）">
+      <span class="lbl">语速</span>
+      <input id="rate" type="range" min="0.5" max="2" step="0.05" value="1" aria-label="语速">
+      <b id="rate-label">1.00×</b>
+    </label>
+  </div>
+  <div class="kbd-hint" id="kbd-hint"></div>
+</div>
+<audio id="au" preload="auto"></audio>
+
+<script src="js/api.js?v=9"></script>
+<script src="js/reader.js?v=9"></script>
+</body>
+</html>

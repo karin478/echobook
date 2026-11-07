@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Echobook</title>
+<link rel="icon" href="icon.svg?v=1" type="image/svg+xml">
+<link rel="stylesheet" href="css/app.css?v=9">
+<script src="js/theme.js?v=9"></script>
+</head>
+<body>
+<main class="wrap book-page">
+  <div class="page-top"><a class="back" href="shelf.html">← 书架</a><span class="theme-slot"></span></div>
+
+  <div id="book" hidden>
+    <section class="book-head">
+      <div class="cover cover-art" id="cover"></div>
+      <div class="head-info">
+        <h1 id="title"></h1>
+        <div class="book-meta" id="meta"></div>
+        <div class="actions">
+          <a class="btn primary" id="continue" href="#">▶ 开始阅读</a>
+          <button class="btn prep-btn" id="prepare" type="button" title="给所有正文章节生成朗读音频和逐句中文，后台一章一章做">准备整本书</button>
+          <span class="spacer"></span>
+          <label class="voice-pick" title="这本书的朗读音色">
+            <span class="lbl">音色</span>
+            <select class="btn" id="voice" aria-label="音色"></select>
+          </label>
+          <button class="btn ghost" id="preview" type="button">🔈 试听</button>
+        </div>
+        <div class="prep" id="prep" hidden>
+          <div class="prep-row"><span class="k">音频</span><span class="bar"><i id="prep-audio"></i></span><span class="v" id="prep-audio-n"></span></div>
+          <div class="prep-row"><span class="k">中文</span><span class="bar"><i id="prep-zh"></i></span><span class="v" id="prep-zh-n"></span></div>
+        </div>
+        <p class="hint">「准备」= 这一章的朗读音频 + 逐句中文（打开阅读页也会自动准备本章和下一章）；「准备整本书」= 所有正文章节。换音色只影响之后准备的章节。</p>
+      </div>
+    </section>
+
+    <section class="chapters" id="chapters" aria-label="章节"></section>
+  </div>
+
+  <div id="missing" class="not-found" hidden>
+    <h2>找不到这本书</h2>
+    <p>它可能已经被删除了。<a href="shelf.html">回到书架</a></p>
+  </div>
+</main>
+
+<script src="js/api.js?v=9"></script>
+<script src="js/book.js?v=9"></script>
+</body>
+</html>

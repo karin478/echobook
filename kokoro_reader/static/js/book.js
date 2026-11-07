@@ -1,0 +1,412 @@
+/* Echobook — book page: info, continue reading, voice, conversion controls, chapter list. */
+"use strict";
+
+const bookId = new URLSearchParams(location.search).get("id") || "";
+const $ = (id) => document.getElementById(id);
+const els = {
+  book: $("book"), missing: $("missing"), cover: $("cover"), title: $("title"), meta: $("meta"),
+  cont: $("continue"), voice: $("voice"), preview: $("preview"), prepare: $("prepare"),
+  list: $("chapters"), prep: $("prep"),
+};
+
+const VOICE_GROUPS = ["美式女声", "美式男声", "英式女声", "英式男声"];
+const GENERIC_TITLE = /^\s*(chapter|ch\.?)?\s*([0-9]+|[ivxlcdm]+)\s*[.:]?\s*$/i;
+
+const state = {
+  book: null,
+  queue: { current: null, pending: [] },
+  voices: [],
+  matterOpen: false,
+  openMenu: null,        // idx of the story row whose "⋯" menu is open
+  structSig: "",
+  rowHtml: new Map(),    // idx -> last rendered html
+  voiceSaving: false,
+  coverDone: false,
+};
+
+/* ---------- derived ---------- */
+function storyChapters() { return state.book.chapters.filter((c) => !c.is_matter); }
+function matterChapters() { return state.book.chapters.filter((c) => c.is_matter); }
+
+function numbering() {
+  const map = new Map();
+  storyChapters().forEach((c, i) => map.set(c.idx, i + 1));
+  return map;
+}
+
+function chapterLabel(idx, nums) {
+  if (nums.has(idx)) return `Ch ${nums.get(idx)}`;
+  const ch = state.book.chapters.find((c) => c.idx === idx);
+  return ch && ch.title ? `「${ch.title}」` : `第 ${idx + 1} 部分`;
+}
+
+function readerHref(idx) { return `reader.html?book=${bookId}&ch=${idx}`; }
+
+function voiceName(id) {
+  const v = state.voices.find((x) => x.id === id);
+  return v ? v.label.split("（")[0] : id;
+}
+
+/** One status per chapter for its audio + Chinese together (the 中文 column shows translation detail). */
+function chapterState(ch) {
+  const cur = state.queue.current;
+  if (cur && cur.book_id === bookId && cur.idx === ch.idx) return { cls: "run", text: `音频 ${pct(cur.progress)}%` };
+  if (ch.status === "converting") return { cls: "run", text: "音频 0%" };
+  if (ch.status === "queued") return { cls: "q", text: "排队中" };
+  if (ch.status === "error" || ch.zh === "error") return { cls: "err", text: "出错" };
+  if (ch.read_ratio >= 0.98) return { cls: "ok", text: "✓ 已读完" };
+  if (ch.read_ratio > 0) return { cls: "ok", text: `读到 ${pct(ch.read_ratio)}%` };
+  if (ch.status === "done" && ch.zh === "done") return { cls: "ok", text: "已准备" };
+  if (ch.status === "done" && (ch.zh === "queued" || ch.zh === "running")) return { cls: "run", text: "准备中" };
+  return { cls: "none", text: "未准备" };
+}
+
+/* ---------- header ---------- */
+function renderHeader() {
+  const b = state.book;
+  const nums = numbering();
+  document.title = `${b.title} · Echobook`;
+  els.title.textContent = b.title;
+  if (!state.coverDone) {
+    els.cover.innerHTML = coverInner(b);
+    state.coverDone = true;
+  }
+
+  const parts = [];
+  if (b.author) parts.push(escapeHtml(b.author));
+  parts.push(`${b.total} 章`, `音频 ${b.converted}/${b.total}`, `中文 ${b.translated}/${b.total}`);
+  if (b.glossary) parts.push(`<span title="全书统一译名的人名和术语">术语表 ${b.glossary} 条</span>`);
+  const prog = b.progress;
+  if (prog) {
+    const ch = b.chapters.find((c) => c.idx === prog.chapter);
+    const ratio = ch ? ch.read_ratio : 0;
+    parts.push(ratio >= 0.98 ? `读完 ${escapeHtml(chapterLabel(prog.chapter, nums))}`
+      : `读到 ${escapeHtml(chapterLabel(prog.chapter, nums))} 的 ${pct(ratio)}%`);
+  }
+  const metaHtml = parts.join('<span class="dot">·</span>');
+  if (els.meta.innerHTML !== metaHtml) els.meta.innerHTML = metaHtml;
+
+  const first = storyChapters()[0] || b.chapters[0];
+  if (prog) {
+    els.cont.textContent = `▶ 继续阅读 ${chapterLabel(prog.chapter, nums)}`;
+    els.cont.href = readerHref(prog.chapter);
+  } else {
+    els.cont.textContent = "▶ 开始阅读";
+    els.cont.href = first ? readerHref(first.idx) : "#";
+  }
+  els.cont.hidden = !first && !prog;
+
+  if (!state.voiceSaving && els.voice.value !== b.voice) els.voice.value = b.voice;
+  renderPrep();
+}
+
+/** Two thin progress bars while the book is being prepared (anything queued / converting / translating). */
+function renderPrep() {
+  const b = state.book;
+  const story = storyChapters();
+  const busy = story.some((c) => c.status === "queued" || c.status === "converting" ||
+    c.zh === "queued" || c.zh === "running");
+  els.prep.hidden = !busy;
+  const done = b.total ? story.length : 0;
+  els.prepare.hidden = !story.length || (b.converted === b.total && b.translated === b.total);
+  if (!busy || !done) return;
+  const cur = state.queue.current;
+  const audioPart = story.reduce((n, c) => n + (c.status === "done" ? 1
+    : cur && cur.book_id === bookId && cur.idx === c.idx ? cur.progress || 0 : 0), 0);
+  const zhPart = story.reduce((n, c) => n + (c.zh === "done" ? 1 : c.zh === "running" ? c.zh_progress || 0 : 0), 0);
+  $("prep-audio").style.width = `${(audioPart / done) * 100}%`;
+  $("prep-zh").style.width = `${(zhPart / done) * 100}%`;
+  $("prep-audio-n").textContent = `${b.converted} / ${b.total}`;
+  $("prep-zh-n").textContent = `${b.translated} / ${b.total}`;
+}
+
+/* ---------- chapter list ---------- */
+function titleHtml(ch) {
+  const title = (ch.title || "").trim();
+  const first = (ch.first_line || "").trim();
+  if (!title || GENERIC_TITLE.test(title)) return escapeHtml(first || title || "（无标题）");
+  return escapeHtml(title) + (first && first !== title ? ` <span class="first">· ${escapeHtml(first)}</span>` : "");
+}
+
+function opsHtml(ch) {
+  const out = [];
+  const playable = ch.status === "done" || (ch.duration != null && ch.status !== "none");
+  const failed = ch.status === "error" || ch.zh === "error";
+  const busy = ch.status === "queued" || ch.status === "converting" || ch.zh === "queued" || ch.zh === "running";
+  if (failed && !busy) out.push(`<button class="btn small" type="button" data-action="convert" title="重新准备这一章的音频和中文">重试</button>`);
+  else if (!busy && (ch.status === "none" || ch.zh === "none")) {
+    out.push(`<button class="btn small" type="button" data-action="convert" title="生成这一章的朗读音频 + 逐句中文">准备</button>`);
+  }
+  if (ch.status === "done" && ch.voice && ch.voice !== state.book.voice) {
+    out.push(`<button class="btn small" type="button" data-action="reconvert" title="用 ${escapeHtml(voiceName(state.book.voice))} 重新生成这一章的音频">用新音色重录</button>`);
+  }
+  if (playable) out.push(`<a class="btn small read-link" href="${readerHref(ch.idx)}">▶ 读</a>`);
+  if (ch.is_matter) {
+    out.push(`<button class="btn small ghost switch-btn" type="button" data-action="set-story" title="把它当作正文（会计入章节和「准备整本书」）">设为正文</button>`);
+  } else {
+    const open = state.openMenu === ch.idx;
+    out.push(`<button class="row-menu-btn" type="button" data-action="menu" aria-label="更多操作" aria-expanded="${open}">⋯</button>`);
+    if (open) out.push(`<div class="row-menu" role="menu"><button type="button" data-action="set-matter">设为非正文</button></div>`);
+  }
+  return out.join("");
+}
+
+function zhHtml(ch) {
+  if (ch.is_matter && ch.zh === "none") return `<span class="zh"></span>`;
+  if (ch.zh === "done") return `<span class="zh ok" title="逐句中文已就绪">中文</span>`;
+  if (ch.zh === "running") return `<span class="zh run">翻译 ${pct(ch.zh_progress || 0)}%</span>`;
+  if (ch.zh === "queued") return `<span class="zh q">排队翻译</span>`;
+  if (ch.zh === "error") return `<span class="zh err" title="翻译失败，点这一行的「重试」">翻译失败</span>`;
+  return `<span class="zh"></span>`;
+}
+
+/** The pieces of one chapter row: its classes and each cell's inner HTML. */
+function rowParts(ch, nums) {
+  const st = chapterState(ch);
+  const num = nums.get(ch.idx);
+  const prog = state.book.progress;
+  const cls = ["chapter-row", ch.is_matter ? "matter" : "story"];
+  if (prog && prog.chapter === ch.idx) cls.push("current");
+  const showDur = ch.duration != null && ch.status !== "none";
+  return {
+    cls: cls.join(" "), num,
+    cells: {
+      num: num ? `Ch ${num}` : "",
+      ttl: titleHtml(ch),
+      dur: showDur ? fmtDuration(ch.duration) : "",
+      "tag-cell": `<span class="tag ${st.cls}">${st.text}</span>`,
+      "zh-cell": zhHtml(ch),
+      ops: opsHtml(ch),
+    },
+  };
+}
+
+function rowHtml(ch, nums) {
+  const r = rowParts(ch, nums);
+  const tip = [ch.title, ch.first_line].filter(Boolean).join(" — ");
+  const c = r.cells;
+  return `<div class="${r.cls}" data-idx="${ch.idx}"${r.num ? ` data-num="${r.num}"` : ""}>` +
+    `<span class="num">${c.num}</span>` +
+    `<span class="ttl" title="${escapeHtml(tip)}">${c.ttl}</span>` +
+    `<span class="dur">${c.dur}</span>` +
+    `<span class="tag-cell">${c["tag-cell"]}</span>` +
+    `<span class="zh-cell">${c["zh-cell"]}</span>` +
+    `<span class="ops">${c.ops}</span></div>`;
+}
+
+/** Poll updates touch only the cells that changed, so a button or link under the pointer (or
+ *  with keyboard focus) is not replaced mid-click while a percentage ticks. */
+function patchRow(el, ch, nums) {
+  const r = rowParts(ch, nums);
+  if (el.className !== r.cls) el.className = r.cls;
+  const last = el._cells || (el._cells = {}); // what we last wrote (innerHTML is browser-normalised)
+  for (const [k, html] of Object.entries(r.cells)) {
+    const cell = el.querySelector(`:scope > .${k}`);
+    if (cell && last[k] !== html && cell.innerHTML !== html) cell.innerHTML = html;
+    last[k] = html;
+  }
+}
+
+function structureSig() {
+  return JSON.stringify([state.matterOpen,
+    state.book.chapters.map((c) => [c.idx, c.is_matter, c.part])]);
+}
+
+function renderList() {
+  const nums = numbering();
+  const sig = structureSig();
+  if (sig !== state.structSig) {
+    state.structSig = sig;
+    state.rowHtml.clear();
+    const html = [];
+    let part = null;
+    for (const ch of storyChapters()) {
+      if (ch.part && ch.part !== part) html.push(`<div class="part-head">${escapeHtml(ch.part)}</div>`);
+      part = ch.part;
+      const r = rowHtml(ch, nums);
+      state.rowHtml.set(ch.idx, r);
+      html.push(r);
+    }
+    const matter = matterChapters();
+    if (matter.length) {
+      html.push(`<button class="matter-toggle" type="button" aria-expanded="${state.matterOpen}">` +
+        `已隐藏 ${matter.length} 个非正文部分 <span class="arrow">▸</span></button>`);
+      html.push(`<div class="matter-list"${state.matterOpen ? "" : " hidden"}>` + matter.map((ch) => {
+        const r = rowHtml(ch, nums);
+        state.rowHtml.set(ch.idx, r);
+        return r;
+      }).join("") + "</div>");
+    }
+    els.list.innerHTML = html.join("");
+    return;
+  }
+  for (const ch of state.book.chapters) {
+    const r = rowHtml(ch, nums);
+    if (state.rowHtml.get(ch.idx) === r) continue;
+    const el = els.list.querySelector(`.chapter-row[data-idx="${ch.idx}"]`);
+    if (el) patchRow(el, ch, nums);
+    state.rowHtml.set(ch.idx, r);
+  }
+}
+
+function render() {
+  renderHeader();
+  renderList();
+}
+
+/* ---------- data ---------- */
+let seq = 0;
+async function refresh() {
+  const my = ++seq;
+  let book, queue;
+  try {
+    [book, queue] = await Promise.all([api.get(`/api/books/${bookId}`), api.get("/api/queue")]);
+  } catch (e) {
+    if (e.status === 404) showMissing();
+    throw e;
+  }
+  if (my !== seq) return;
+  state.book = book;
+  state.queue = queue;
+  els.book.hidden = false;
+  render();
+}
+
+function showMissing() {
+  els.book.hidden = true;
+  els.missing.hidden = false;
+  document.title = "找不到这本书 · Echobook";
+}
+
+async function act(fn) {
+  try {
+    await fn();
+  } catch (e) {
+    toast(e.message, "error");
+  }
+  await refresh().catch(() => {});
+}
+
+/* ---------- chapter actions ---------- */
+els.list.addEventListener("click", (e) => {
+  if (e.target.closest(".matter-toggle")) {
+    state.matterOpen = !state.matterOpen;
+    renderList();
+    return;
+  }
+  const btn = e.target.closest("[data-action]");
+  if (!btn) return;
+  const idx = Number(btn.closest(".chapter-row").dataset.idx);
+  const action = btn.dataset.action;
+  const base = `/api/books/${bookId}`;
+  if (action === "menu") {
+    state.openMenu = state.openMenu === idx ? null : idx;
+    renderList();
+  } else if (action === "convert") {
+    act(() => api.post(`${base}/convert`, { mode: "one", chapter: idx }));
+  } else if (action === "reconvert") {
+    act(() => api.post(`${base}/convert`, { mode: "reconvert", chapter: idx }));
+  } else if (action === "set-matter") {
+    state.openMenu = null;
+    act(async () => {
+      await api.put(`${base}/chapters/${idx}/matter`, { is_matter: true });
+      toast("已移到「非正文部分」，需要时可以展开改回来");
+    });
+  } else if (action === "set-story") {
+    act(() => api.put(`${base}/chapters/${idx}/matter`, { is_matter: false }));
+  }
+});
+
+document.addEventListener("click", (e) => {
+  if (state.openMenu !== null && !e.target.closest(".row-menu, .row-menu-btn")) {
+    state.openMenu = null;
+    renderList();
+  }
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && state.openMenu !== null) {
+    state.openMenu = null;
+    renderList();
+  }
+});
+
+/* ---------- 准备整本书: audio + Chinese for every story chapter ---------- */
+els.prepare.addEventListener("click", () => act(async () => {
+  els.prepare.disabled = true;
+  try {
+    const r = await api.post(`/api/books/${bookId}/prepare`);
+    if (!r.audio && !r.zh) toast("正文章节都已经准备好或在处理中了");
+    else toast(`开始准备：${r.audio} 章音频、${r.zh} 章中文，会在后台慢慢做完，可以先读已好的章节`);
+  } finally {
+    els.prepare.disabled = false;
+  }
+}));
+
+/* ---------- voice + preview ---------- */
+function fillVoices() {
+  const groups = new Map(VOICE_GROUPS.map((g) => [g, []]));
+  for (const v of state.voices) {
+    const g = `${v.accent}${v.gender}声`;
+    if (!groups.has(g)) groups.set(g, []);
+    const name = v.label.split("（")[0] + (v.id === "af_heart" ? "（默认）" : "");
+    groups.get(g).push(`<option value="${v.id}">${escapeHtml(name)}</option>`);
+  }
+  els.voice.innerHTML = [...groups].filter(([, opts]) => opts.length)
+    .map(([g, opts]) => `<optgroup label="${g}">${opts.join("")}</optgroup>`).join("");
+}
+
+els.voice.addEventListener("change", async () => {
+  const voice = els.voice.value;
+  stopPreview();
+  state.voiceSaving = true;
+  try {
+    await api.put(`/api/books/${bookId}/voice`, { voice });
+    toast(`音色已换成 ${voiceName(voice)}，之后准备的章节会用它`);
+  } catch (e) {
+    toast(e.message, "error");
+  }
+  state.voiceSaving = false;
+  await refresh().catch(() => {});
+});
+
+const previewAudio = new Audio();
+function resetPreviewBtn() { els.preview.textContent = "🔈 试听"; }
+function stopPreview() {
+  previewAudio.pause();
+  previewAudio.removeAttribute("src");
+  resetPreviewBtn();
+}
+previewAudio.addEventListener("playing", () => { els.preview.textContent = "⏹ 停止"; });
+previewAudio.addEventListener("ended", stopPreview);
+previewAudio.addEventListener("error", () => {
+  if (!previewAudio.getAttribute("src")) return;
+  toast("试听生成失败，请稍后再试", "error");
+  stopPreview();
+});
+els.preview.addEventListener("click", () => {
+  if (previewAudio.getAttribute("src")) {
+    stopPreview();
+    return;
+  }
+  els.preview.textContent = "⏳ 生成中…";
+  previewAudio.src = `/api/voices/${encodeURIComponent(els.voice.value)}/preview.mp3`;
+  previewAudio.play().catch(() => {});
+});
+
+/* ---------- go ---------- */
+async function init() {
+  if (!/^[0-9a-f]{32}$/.test(bookId)) {
+    showMissing();
+    return;
+  }
+  try {
+    state.voices = await api.get("/api/voices");
+    fillVoices();
+    await refresh();
+  } catch (e) {
+    if (e.status !== 404) toast(e.message, "error");
+    if (!state.book) return;
+  }
+  startPolling(() => refresh(), 1000);
+}
+init();
