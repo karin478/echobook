@@ -92,26 +92,45 @@ def test_shelf_drag_reorder_persists(page: Page, live_server, make_book):
     expect(cards(page).nth(1)).to_contain_text("First Book")
 
 
-def test_shelf_delete_with_confirm(page: Page, live_server, sample_epub):
-    live_server.upload(sample_epub)
+def test_shelf_delete_offers_audio_only_or_the_whole_book(page: Page, live_server, sample_epub):
+    """删除 asks: only the audio (text, 中文, progress stay) or the whole book. 生词本 always stays."""
+    bid = live_server.upload(sample_epub)["id"]
     open_shelf(page, live_server)
     card = cards(page).first
     expect(card).to_be_visible()
+    expect(page.locator("#storage")).to_contain_text("占用")
 
-    # cancelling the confirm keeps the book
-    page.once("dialog", lambda d: d.dismiss())
+    # no audio yet: only "delete the book" is offered; 取消 keeps it
     card.hover()
     card.get_by_role("button", name="删除").click()
+    dlg = page.get_by_role("dialog", name="删除《The Sample Book》")
+    expect(dlg).to_be_visible()
+    expect(dlg).to_contain_text("生词本里的收藏都会保留")
+    expect(dlg.get_by_role("button", name="只删音频")).to_have_count(0)
+    dlg.get_by_role("button", name="取消").click()
+    expect(dlg).to_be_hidden()
     expect(cards(page)).to_have_count(1)
 
-    # right-click also reveals the delete button; accepting removes the book
-    seen = []
-    page.once("dialog", lambda d: (seen.append(d.message), d.accept()))
+    # with audio: 只删音频 keeps the book, back to 未准备
+    live_server.api("POST", f"/api/books/{bid}/convert", {"mode": "one", "chapter": 0})
+    live_server.wait_chapter(bid, 0, "done")
+    vocab = live_server.api("POST", "/api/vocab", {"book_id": bid, "chapter": 0, "para": 0,
+                                                     "start_char": 0, "end_char": 3})
     page.mouse.move(0, 0)
-    card.click(button="right")
+    card.click(button="right")  # right-click also reveals the delete button
     card.get_by_role("button", name="删除").click()
+    expect(dlg).to_contain_text("音频")
+    dlg.get_by_role("button", name="只删音频").click()
+    expect(page.locator(".toasts")).to_contain_text("已删除音频")
+    expect(cards(page)).to_have_count(1)
+    assert live_server.api("GET", f"/api/books/{bid}")["chapters"][0]["status"] == "none"
+
+    # the whole book: gone, but its 生词 stay
+    card.hover()
+    card.get_by_role("button", name="删除").click()
+    dlg.get_by_role("button", name="删除整本书").click()
     expect(cards(page)).to_have_count(0)
-    assert "The Sample Book" in seen[0]
     page.reload()
     expect(cards(page)).to_have_count(0)
     assert live_server.api("GET", "/api/books") == []
+    assert [v["id"] for v in live_server.api("GET", "/api/vocab")] == [vocab["id"]]

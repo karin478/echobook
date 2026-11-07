@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>我的书架 · Echobook</title>
 <link rel="icon" href="icon.svg?v=1" type="image/svg+xml">
-<link rel="stylesheet" href="css/app.css?v=12">
-<script src="js/theme.js?v=12"></script>
+<link rel="stylesheet" href="css/app.css?v=16">
+<script src="js/theme.js?v=16"></script>
 </head>
 <body>
 <main class="wrap">
@@ -16,6 +16,7 @@
       <h1>我的书架</h1>
     </div>
     <div class="tools">
+      <span class="storage" id="storage" title="Echobook 的书、音频和生词一共占用的磁盘空间"></span>
       <span class="theme-slot"></span>
       <a class="btn ghost" href="vocab.html">生词本</a>
       <button class="btn primary" id="upload-btn" type="button">＋ 上传 EPUB</button>
@@ -27,6 +28,21 @@
   <p id="empty-note" class="empty-note" hidden>书架还是空的。把 EPUB 拖进这个页面，或点右上角「＋ 上传 EPUB」。</p>
 </main>
 
+<dialog id="del-dlg" class="del-dlg">
+  <h2 class="del-title"></h2>
+  <p class="del-use"></p>
+  <div class="del-opts">
+    <button class="del-opt" type="button" data-del="audio">
+      <b>只删音频</b><span>保留文字、中文翻译和阅读进度，以后想听可以重新生成</span>
+    </button>
+    <button class="del-opt danger" type="button" data-del="book">
+      <b>删除整本书</b><span>书、音频和中文翻译都删掉</span>
+    </button>
+  </div>
+  <p class="del-keep">生词本里的收藏都会保留（含句子音频）。</p>
+  <div class="del-foot"><button class="btn ghost" type="button" data-del="cancel">取消</button></div>
+</dialog>
+
 <div id="drop-overlay" class="drop-overlay" hidden>
   <div class="drop-box">
     <div class="icon">📥</div>
@@ -35,7 +51,7 @@
   </div>
 </div>
 
-<script src="js/api.js?v=12"></script>
-<script src="js/shelf.js?v=12"></script>
+<script src="js/api.js?v=16"></script>
+<script src="js/shelf.js?v=16"></script>
 </body>
 </html>

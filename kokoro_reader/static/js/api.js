@@ -134,6 +134,22 @@ function glossUnits(text) {
   return out.map((u) => ({ head: u.head, block: u.lines.join("\n") }));
 }
 
+/** 161 MB · 4.3 GB · 820 KB */
+function fmtBytes(n) {
+  const v = Number(n) || 0;
+  if (v < 1e6) return `${Math.max(0, Math.round(v / 1e3))} KB`;
+  if (v < 1e9) return `${v < 1e7 ? (v / 1e6).toFixed(1) : Math.round(v / 1e6)} MB`;
+  return `${(v / 1e9).toFixed(1)} GB`;
+}
+
+/** 预计 / 还剩 time: 不到 1 分钟 · 约 12 分钟 · 约 1.5 小时 */
+function fmtEta(sec) {
+  const s = Number(sec) || 0;
+  if (s < 60) return "不到 1 分钟";
+  if (s < 3600) return `约 ${Math.round(s / 60)} 分钟`;
+  return `约 ${(s / 3600).toFixed(1).replace(/\.0$/, "")} 小时`;
+}
+
 function fmtDuration(sec) {
   if (sec == null) return "";
   const s = Math.round(sec);

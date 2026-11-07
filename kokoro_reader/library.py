@@ -139,10 +139,52 @@ class Library:
 
     def delete_book(self, book_id: str) -> None:
         """The DB row goes first, so a conversion or translation still running sees the book is
-        gone before its folder disappears (and never recreates it)."""
-        vdir = self.home / "vocab"
-        clips = [vdir / f"{v['id']}.mp3" for v in self.store.list_vocab() if v.get("book_id") == book_id]
+        gone before its folder disappears (and never recreates it). 生词本 entries and their
+        sentence clips (in <home>/vocab) stay."""
         self.store.delete_book(book_id)
-        for clip in clips:
-            clip.unlink(missing_ok=True)
         shutil.rmtree(self.book_dir(book_id), ignore_errors=True)
+
+    def delete_audio(self, book_id: str) -> None:
+        """Only the chapter audio (and its word timings): text, Chinese and progress stay."""
+        self.store.clear_audio(book_id)
+        shutil.rmtree(self.book_dir(book_id) / "ch", ignore_errors=True)
+
+    # ---- disk use ----
+    def disk_usage(self, book_id: str) -> dict:
+        """Bytes of a book's audio (ch/: mp3 + word timings) and of everything else in its folder."""
+        audio = other = 0
+        root = self.book_dir(book_id)
+        for f in root.rglob("*"):
+            if f.is_file():
+                n = f.stat().st_size
+                if f.parent == root / "ch":
+                    audio += n
+                else:
+                    other += n
+        return {"audio": audio, "other": other}
+
+    def sweep(self) -> int:
+        """Remove leftovers (call at startup, before any work starts): folders of books no longer in
+        the DB, interrupted imports, half-written files and clips no 生词 points at. Bytes freed."""
+        freed = 0
+
+        def drop(p: Path) -> None:
+            nonlocal freed
+            files = [p] if p.is_file() else [f for f in p.rglob("*") if f.is_file()]
+            freed += sum(f.stat().st_size for f in files)
+            shutil.rmtree(p, ignore_errors=True) if p.is_dir() else p.unlink(missing_ok=True)
+
+        books = {b["id"] for b in self.store.list_books()}
+        if self._books.is_dir():
+            for d in self._books.iterdir():
+                if d.is_dir() and d.name not in books:
+                    drop(d)
+            for f in self._books.rglob("*.tmp"):
+                drop(f)
+        vdir = self.home / "vocab"
+        if vdir.is_dir():
+            keep = {f"{v['id']}.mp3" for v in self.store.list_vocab()}
+            for f in vdir.iterdir():
+                if f.is_file() and f.name not in keep:
+                    drop(f)
+        return freed

@@ -97,8 +97,7 @@ def test_delete_book_cascades(store):
     store.delete_book(a)
     assert store.get_book(a) is None
     assert store.list_chapters(a) == []
-    assert store.get_vocab(v) is None
-    assert store.list_vocab() == []
+    assert store.get_vocab(v)["text"] == "hi"  # 生词本 outlives the book
     assert store.get_progress(a) is None
 
 
@@ -157,7 +156,7 @@ def test_constants():
     assert config.SAMPLE_RATE == 24000
     assert config.PARA_GAP == 0.2
     assert config.EDGE_KEEP == 0.2  # max silence kept at each end of a Kokoro chunk
-    assert config.MP3_BITRATE == "96k"
+    assert config.MP3_BITRATE == "48k"
 
 
 def test_add_vocab_accepts_caller_supplied_id(store):
@@ -165,3 +164,39 @@ def test_add_vocab_accepts_caller_supplied_id(store):
     vid = store.add_vocab({"id": "abc123", "book_id": a, "text": "hi", "sentence": "hi there"})
     assert vid == "abc123"
     assert store.get_vocab("abc123")["text"] == "hi"
+
+
+def test_old_database_is_migrated_so_vocab_outlives_its_book(tmp_path):
+    """Databases from before: vocab.book_id cascaded, so deleting a book wiped its 生词."""
+    import sqlite3
+    db = tmp_path / "old.db"
+    c = sqlite3.connect(db)
+    c.executescript("""
+        PRAGMA foreign_keys = ON;
+        CREATE TABLE books (id TEXT PRIMARY KEY, title TEXT NOT NULL, author TEXT, sha256 TEXT NOT NULL,
+                            voice TEXT NOT NULL, position INTEGER NOT NULL, created_at REAL NOT NULL);
+        CREATE TABLE vocab (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE,
+                            book_id TEXT REFERENCES books(id) ON DELETE CASCADE,
+                            created_at REAL NOT NULL, data TEXT NOT NULL);
+        INSERT INTO books VALUES ('b1', 'T', NULL, 'x', 'af_heart', 0, 0);
+        INSERT INTO vocab (id, book_id, created_at, data) VALUES ('v1', 'b1', 1, '{"text": "one"}');
+        INSERT INTO vocab (id, book_id, created_at, data) VALUES ('v2', 'b1', 2, '{"text": "two"}');
+    """)
+    c.commit()
+    c.close()
+    store = Store(db)
+    store.delete_book("b1")
+    assert [v["text"] for v in store.list_vocab()] == ["two", "one"]  # order kept
+    assert store.add_vocab({"book_id": "b1", "text": "three"})
+    Store(db)  # opening again is a no-op
+    assert len(store.list_vocab()) == 3
+
+
+def test_clear_audio_resets_chapters(store):
+    a = mk(store, "a")
+    store.add_chapters(a, chapters())
+    store.set_chapter_status(a, 0, "done", duration=12.5, voice="af_heart")
+    store.clear_audio(a)
+    (c0, c1) = store.list_chapters(a)
+    assert (c0["status"], c0["duration"], c0["voice"]) == ("none", None, None)
+    assert c1["status"] == "none"

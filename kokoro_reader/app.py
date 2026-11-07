@@ -24,6 +24,7 @@ from .bilingual import TranslationJobs, sentence_view
 from .epub_extract import EpubError
 from .library import Library
 from .queue import ConversionQueue
+from .estimate import SpeedLog, eta_by_book
 from .store import Store
 from . import anki as ankimod
 from .quick_mt import MTError, make_mt
@@ -106,7 +107,8 @@ def create_app(home: Path, synth: Synthesizer, start_worker: bool = True,
     home = Path(home)
     store = Store(home / "kokoro.db")
     library = Library(home, store)
-    queue = ConversionQueue(store, library, synth, autostart=False)
+    speed = SpeedLog(home / "speed.json")
+    queue = ConversionQueue(store, library, synth, autostart=False, speed=speed)
     translations = TranslationJobs(library, translator_factory or make_translator,
                                    max_chapters=translate_workers)
     # previews get their own synth so they never share inference state with the worker
@@ -115,6 +117,12 @@ def create_app(home: Path, synth: Synthesizer, start_worker: bool = True,
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        try:
+            freed = library.sweep()  # nothing is running yet: leftovers of earlier runs only
+            if freed:
+                log.info("startup sweep freed %d bytes", freed)
+        except OSError:
+            log.exception("startup sweep failed")
         if start_worker:
             queue.start()
         try:
@@ -214,6 +222,24 @@ def create_app(home: Path, synth: Synthesizer, start_worker: bool = True,
         library.delete_book(book_id)
         return Response(status_code=204)
 
+    @app.delete("/api/books/{book_id}/audio", status_code=204)
+    def delete_book_audio(book_id: str):
+        """Only the audio: chapters go back to 未准备; text, Chinese, progress and 生词本 stay."""
+        book_or_404(book_id)
+        snap = queue.snapshot()
+        busy = [c for c in store.list_chapters(book_id) if c["status"] in ("queued", "converting")]
+        if busy or (snap["current"] and snap["current"]["book_id"] == book_id):
+            raise HTTPException(409, "这本书还在生成音频，等它做完再删")
+        library.delete_audio(book_id)
+        return Response(status_code=204)
+
+    @app.get("/api/storage")
+    def get_storage():
+        """Disk use: each book's audio / other files, and the whole data folder."""
+        per = {b["id"]: library.disk_usage(b["id"]) for b in store.list_books()}
+        total = sum(f.stat().st_size for f in home.rglob("*") if f.is_file())
+        return {"total": total, "books": per}
+
     @app.get("/api/books/{book_id}")
     def get_book(book_id: str):
         book = book_or_404(book_id)
@@ -222,7 +248,8 @@ def create_app(home: Path, synth: Synthesizer, start_worker: bool = True,
             zh = translations.status(book_id, c["idx"])
             chapters.append({**c, "zh": zh["status"], "zh_progress": zh["progress"]})
         g = library.glossary(book_id)
-        return {**book_info(book), "chapters": chapters, "glossary": None if g is None else len(g)}
+        return {**book_info(book), "chapters": chapters, "glossary": None if g is None else len(g),
+                "estimate": speed.rates(), "disk": library.disk_usage(book_id)}
 
     def translate_chapters(book: dict, idxs: list[int], priority: str) -> int:
         """Start (or, for "high", move up) the Chinese for these chapters, first one first;
@@ -390,7 +417,15 @@ def create_app(home: Path, synth: Synthesizer, start_worker: bool = True,
     # ---- queue / voices ----
     @app.get("/api/queue")
     def get_queue():
-        return queue.snapshot()
+        """The queue, plus each book's seconds until its last queued chapter has audio."""
+        snap = queue.snapshot()
+        chars: dict[str, dict[int, int]] = {}
+
+        def chars_of(book_id, idx):
+            if book_id not in chars:
+                chars[book_id] = {c["idx"]: c["chars"] for c in store.list_chapters(book_id)}
+            return chars[book_id].get(idx, 0)
+        return {**snap, "eta": eta_by_book(snap, chars_of, speed.rates()["conv_cps"])}
 
     @app.get("/api/voices")
     def get_voices():

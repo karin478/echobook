@@ -104,7 +104,8 @@ def test_convert_open_then_chapter_has_tokens_and_audio(ctx, book):
     assert ch["tokens"] is None and ch["audio_url"] is None and ch["status"] == "none"
     snap = client.post(f"/api/books/{book}/convert", json={"mode": "open", "chapter": 0}).json()
     assert snap["pending"]
-    assert client.get("/api/queue").json() == snap
+    q = client.get("/api/queue").json()
+    assert {k: q[k] for k in ("current", "pending")} == snap and set(q["eta"]) == {book}
     app.state.queue.run_once()
     ch = client.get(f"/api/books/{book}/chapters/0").json()
     assert ch["status"] == "done" and ch["tokens"] and ch["duration"] > 0
@@ -436,3 +437,57 @@ def test_vocab_rejects_a_chapter_that_does_not_exist(ctx, book):
 def test_unused_batch_convert_modes_are_gone(ctx, book, mode):
     client, *_ = ctx
     assert client.post(f"/api/books/{book}/convert", json={"mode": mode}).status_code == 400
+
+
+def test_delete_only_the_audio_of_a_book(ctx, book):
+    """书架 → 删除 → 只删音频: chapters go back to 未准备; text, Chinese, progress and 生词本 stay."""
+    client, app, synth, tmp = ctx
+    client.post(f"/api/books/{book}/convert", json={"mode": "one", "chapter": 0})
+    app.state.queue.run_once()
+    rec = client.post("/api/vocab", json={"book_id": book, "chapter": 0, "para": 0,
+                                           "start_char": 0, "end_char": 4}).json()
+    use = client.get("/api/storage").json()
+    assert use["books"][book]["audio"] > 0 and use["books"][book]["other"] > 0
+    assert use["total"] >= use["books"][book]["audio"] + use["books"][book]["other"]
+
+    client.post(f"/api/books/{book}/convert", json={"mode": "one", "chapter": 1})  # queued, not run
+    r = client.delete(f"/api/books/{book}/audio")
+    assert r.status_code == 409 and "生成音频" in r.json()["detail"]
+    app.state.queue.run_once()
+
+    assert client.delete(f"/api/books/{book}/audio").status_code == 204
+    chs = client.get(f"/api/books/{book}").json()["chapters"]
+    assert all(c["status"] == "none" for c in chs)
+    assert client.get("/api/storage").json()["books"][book]["audio"] == 0
+    assert client.get(f"/api/books/{book}/chapters/0").status_code == 200  # text still readable
+    assert client.get(f"/api/vocab/{rec['id']}/clip.mp3").status_code == 200
+
+    # deleting the whole book keeps the 生词本 entry and its clip too
+    assert client.delete(f"/api/books/{book}").status_code == 204
+    assert [v["id"] for v in client.get("/api/vocab").json()] == [rec["id"]]
+    assert client.get(f"/api/vocab/{rec['id']}/clip.mp3").status_code == 200
+    assert client.delete("/api/books/" + "0" * 32 + "/audio").status_code == 404
+
+
+def test_startup_sweeps_leftovers(tmp_path):
+    home = tmp_path / "home"
+    ghost = home / "books" / ("0" * 32)
+    ghost.mkdir(parents=True)
+    (ghost / "source.epub").write_bytes(b"x")
+    app = create_app(home, CountingSynth(), start_worker=False)
+    with TestClient(app, base_url=BASE):
+        assert not ghost.exists()
+
+
+def test_book_and_queue_carry_what_the_estimates_need(ctx, book):
+    client, app, synth, tmp = ctx
+    est = client.get(f"/api/books/{book}").json()["estimate"]
+    assert set(est) == {"conv_cps", "audio_cps", "audio_bytes_per_sec", "measured"}
+    assert est["audio_bytes_per_sec"] == 6000
+    disk = client.get(f"/api/books/{book}").json()["disk"]
+    assert disk["audio"] == 0 and disk["other"] > 0
+    assert client.get("/api/queue").json()["eta"] == {}
+    client.post(f"/api/books/{book}/convert", json={"mode": "one", "chapter": 1})
+    q = client.get("/api/queue").json()
+    chars = client.get(f"/api/books/{book}").json()["chapters"][1]["chars"]
+    assert q["eta"][book] == pytest.approx(chars / est["conv_cps"])

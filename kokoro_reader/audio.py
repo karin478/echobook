@@ -41,7 +41,7 @@ def trim_silence(samples: np.ndarray, keep: float, threshold: float = 0.01) -> t
 
 
 def write_mp3(samples: np.ndarray, dst: Path) -> float:
-    """Encode samples as a 96k mp3 at dst; returns duration in seconds (0.0 and no file if empty)."""
+    """Encode samples as an mp3 (MP3_BITRATE) at dst; returns duration in seconds (0.0 and no file if empty)."""
     if len(samples) == 0:
         return 0.0
     with tempfile.TemporaryDirectory() as tmp:

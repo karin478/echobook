@@ -128,3 +128,30 @@ def test_book_continue_reading_links_to_progress(page: Page, live_server, book):
     expect(row(page, 3).locator(".tag")).to_have_text("读到 40%")
     expect(row(page, 2).locator(".tag")).to_have_text("✓ 已读完")
     expect(row(page, 3)).to_have_class(re.compile(r"\bcurrent\b"))
+
+
+def test_estimates_before_and_while_preparing(page: Page, live_server, book):
+    """预计: how long the audio takes to make and how big it gets — before starting, and the time
+    left while it runs. Learned from this machine's past conversions."""
+    open_book(page, live_server, book)
+    expect(page.locator(".book-meta")).to_contain_text(re.compile(r"占用 [\d.]+ (KB|MB)"))
+    est = page.locator("#prep-est")
+    expect(est).to_have_text(re.compile(r"^预计 (不到 1 分钟|约 \d+ 分钟) · 音频约 [\d.]+ (KB|MB)$"))
+    expect(row(page, 1).get_by_role("button", name="准备")).to_have_attribute("title", re.compile("预计"))
+
+    # while preparing, the progress shows the time left (the queue made to look busy and slow)
+    def busy_book(route):
+        data = route.fetch().json()
+        for c in data["chapters"]:
+            if c["idx"] == 2:
+                c["status"] = "converting"
+        route.fulfill(json=data)
+    page.route(f"**/api/books/{book}", busy_book)
+    page.route("**/api/queue", lambda r: r.fulfill(json={
+        "current": {"book_id": book, "idx": 2, "progress": 0.5}, "pending": [], "eta": {book: 5400}}))
+    expect(page.locator("#prep-eta")).to_have_text("音频还剩约 1.5 小时")
+    page.unroute(f"**/api/books/{book}")
+    page.unroute("**/api/queue")
+
+    row(page, 1).get_by_role("button", name="准备").click()
+    expect(page.locator(".toast")).to_contain_text("预计")

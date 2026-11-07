@@ -25,6 +25,15 @@ const state = {
 };
 
 /* ---------- derived ---------- */
+/** Time to make the audio for these chapters, and its size — this machine's measured speed. */
+function estimateFor(chs) {
+  const e = state.book.estimate;
+  const chars = chs.reduce((n, c) => n + (c.chars || 0), 0);
+  if (!e || !chars) return null;
+  return { secs: chars / e.conv_cps, bytes: (chars / e.audio_cps) * e.audio_bytes_per_sec };
+}
+const estText = (x) => `预计 ${fmtEta(x.secs)} · 音频约 ${fmtBytes(x.bytes)}`;
+
 function storyChapters() { return state.book.chapters.filter((c) => !c.is_matter); }
 function matterChapters() { return state.book.chapters.filter((c) => c.is_matter); }
 
@@ -76,6 +85,9 @@ function renderHeader() {
   if (b.author) parts.push(escapeHtml(b.author));
   parts.push(`${b.total} 章`, `音频 ${b.converted}/${b.total}`, `中文 ${b.translated}/${b.total}`);
   if (b.glossary) parts.push(`<span title="全书统一译名的人名和术语">术语表 ${b.glossary} 条</span>`);
+  if (b.disk) {
+    parts.push(`<span title="音频 ${fmtBytes(b.disk.audio)} · 文字和中文 ${fmtBytes(b.disk.other)}（删除在书架上：只删音频或整本书）">占用 ${fmtBytes(b.disk.audio + b.disk.other)}</span>`);
+  }
   const prog = b.progress;
   if (prog) {
     const ch = b.chapters.find((c) => c.idx === prog.chapter);
@@ -109,6 +121,10 @@ function renderPrep() {
   els.prep.hidden = !busy;
   const done = b.total ? story.length : 0;
   els.prepare.hidden = !story.length || (b.converted === b.total && b.translated === b.total);
+  const todo = estimateFor(story.filter((c) => c.status !== "done"));
+  $("prep-est").textContent = !busy && !els.prepare.hidden && todo ? estText(todo) : "";
+  const left = (state.queue.eta || {})[bookId];
+  $("prep-eta").textContent = busy && left ? `音频还剩${fmtEta(left)}` : "";
   if (!busy || !done) return;
   const cur = state.queue.current;
   const audioPart = story.reduce((n, c) => n + (c.status === "done" ? 1
@@ -135,7 +151,8 @@ function opsHtml(ch) {
   const busy = ch.status === "queued" || ch.status === "converting" || ch.zh === "queued" || ch.zh === "running";
   if (failed && !busy) out.push(`<button class="btn small" type="button" data-action="convert" title="重新准备这一章的音频和中文">重试</button>`);
   else if (!busy && (ch.status === "none" || ch.zh === "none")) {
-    out.push(`<button class="btn small" type="button" data-action="convert" title="生成这一章的朗读音频 + 逐句中文">准备</button>`);
+    const x = estimateFor([ch]);
+    out.push(`<button class="btn small" type="button" data-action="convert" title="生成这一章的朗读音频 + 逐句中文${x ? "（" + estText(x) + "）" : ""}">准备</button>`);
   }
   if (ch.status === "done" && ch.voice && ch.voice !== state.book.voice) {
     out.push(`<button class="btn small" type="button" data-action="reconvert" title="用 ${escapeHtml(voiceName(state.book.voice))} 重新生成这一章的音频">用新音色重录</button>`);
@@ -303,7 +320,12 @@ els.list.addEventListener("click", (e) => {
     state.openMenu = state.openMenu === idx ? null : idx;
     renderList();
   } else if (action === "convert") {
-    act(() => api.post(`${base}/convert`, { mode: "one", chapter: idx }));
+    const ch = state.book.chapters.find((c) => c.idx === idx);
+    const x = ch && ch.status !== "done" ? estimateFor([ch]) : null;
+    act(async () => {
+      await api.post(`${base}/convert`, { mode: "one", chapter: idx });
+      toast(x ? `开始准备这一章：${estText(x)}` : "开始准备这一章的中文");
+    });
   } else if (action === "reconvert") {
     act(() => api.post(`${base}/convert`, { mode: "reconvert", chapter: idx }));
   } else if (action === "set-matter") {
@@ -334,9 +356,10 @@ document.addEventListener("keydown", (e) => {
 els.prepare.addEventListener("click", () => act(async () => {
   els.prepare.disabled = true;
   try {
+    const x = estimateFor(storyChapters().filter((c) => c.status !== "done"));
     const r = await api.post(`/api/books/${bookId}/prepare`);
     if (!r.audio && !r.zh) toast("正文章节都已经准备好或在处理中了");
-    else toast(`开始准备：${r.audio} 章音频、${r.zh} 章中文，会在后台慢慢做完，可以先读已好的章节`);
+    else toast(`开始准备：${r.audio} 章音频、${r.zh} 章中文${r.audio && x ? "（" + estText(x) + "）" : ""}，会在后台慢慢做完，可以先读已好的章节`);
   } finally {
     els.prepare.disabled = false;
   }

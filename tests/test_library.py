@@ -94,7 +94,7 @@ def test_import_rename_failure_cleans_rows_and_tmp(lib, epub, monkeypatch):
     assert list((lib.home / "books").iterdir()) == []
 
 
-def test_delete_book_removes_dir_and_vocab_clips(lib, epub):
+def test_delete_book_removes_dir_but_keeps_vocab_and_clips(lib, epub):
     bid, _ = lib.import_epub(epub)
     other, _ = lib.store.add_book("o", "a", "x"), None
     vid = lib.store.add_vocab({"book_id": bid, "word": "w"})
@@ -106,7 +106,7 @@ def test_delete_book_removes_dir_and_vocab_clips(lib, epub):
     lib.delete_book(bid)
     assert not lib.book_dir(bid).exists()
     assert lib.store.get_book(bid) is None
-    assert not (vdir / f"{vid}.mp3").exists()
+    assert (vdir / f"{vid}.mp3").exists() and lib.store.get_vocab(vid) is not None  # 生词本 keeps them
     assert (vdir / f"{ovid}.mp3").exists()
     assert lib.store.list_chapters(bid) == []
 
@@ -134,3 +134,50 @@ def test_cover_path_none_without_cover(lib, tmp_path):
                   toc=[("Chapter 1", "c1.xhtml")])
     bid, _ = lib.import_epub(p)
     assert lib.cover_path(bid) is None
+
+
+def test_delete_audio_keeps_text_chinese_and_progress(lib, epub):
+    bid, _ = lib.import_epub(epub)
+    ch = lib.book_dir(bid) / "ch"
+    zh = lib.book_dir(bid) / "zh"
+    ch.mkdir()
+    zh.mkdir()
+    (ch / "0.mp3").write_bytes(b"x" * 100)
+    (ch / "0.json").write_text("[]")
+    (zh / "0.json").write_text("{}")
+    lib.store.set_chapter_status(bid, 0, "done", duration=3.0, voice="af_heart")
+    lib.store.set_progress(bid, 0, 1, 2, 3.0)
+    assert lib.disk_usage(bid) == {"audio": 102, "other": lib.disk_usage(bid)["other"]}
+    lib.delete_audio(bid)
+    assert not ch.exists()
+    assert (zh / "0.json").exists() and (lib.book_dir(bid) / "text.json").exists()
+    assert lib.store.list_chapters(bid)[0]["status"] == "none"
+    assert lib.store.get_progress(bid) is not None
+    assert lib.disk_usage(bid)["audio"] == 0
+
+
+def test_sweep_removes_only_leftovers(lib, epub):
+    """At startup: folders of books no longer in the DB, half-written files, unreferenced clips."""
+    bid, _ = lib.import_epub(epub)
+    books = lib.home / "books"
+    ghost = books / ("0" * 32)
+    ghost.mkdir()
+    (ghost / "ch").mkdir()
+    (ghost / "ch" / "1.mp3").write_bytes(b"x")
+    half = books / ".tmp-abc"
+    half.mkdir()
+    ch = lib.book_dir(bid) / "ch"
+    ch.mkdir()
+    (ch / "0.mp3").write_bytes(b"keep")
+    (ch / "1.mp3.tmp").write_bytes(b"x")
+    vdir = lib.home / "vocab"
+    vdir.mkdir()
+    vid = lib.store.add_vocab({"book_id": bid, "text": "w"})
+    (vdir / f"{vid}.mp3").write_bytes(b"keep")
+    (vdir / ("1" * 32 + ".mp3")).write_bytes(b"x")
+    freed = lib.sweep()
+    assert freed == 1 + 1 + 1  # bytes of the three leftover files
+    assert not ghost.exists() and not half.exists() and not (ch / "1.mp3.tmp").exists()
+    assert not (vdir / ("1" * 32 + ".mp3")).exists()
+    assert (ch / "0.mp3").exists() and (vdir / f"{vid}.mp3").exists()
+    assert lib.book_dir(bid).exists()

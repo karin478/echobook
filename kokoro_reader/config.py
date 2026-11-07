@@ -7,7 +7,7 @@ DEFAULT_VOICE = "af_heart"
 SAMPLE_RATE = 24000
 PARA_GAP = 0.2   # extra silence between paragraphs, on top of the kept chunk edges
 EDGE_KEEP = 0.2  # Kokoro pads each chunk with ~0.4 s of silence; keep at most this much per side
-MP3_BITRATE = "96k"
+MP3_BITRATE = "48k"  # 24 kHz mono speech: sounds the same as 96k at half the size
 
 
 def port() -> int:

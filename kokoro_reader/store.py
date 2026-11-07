@@ -43,10 +43,24 @@ CREATE TABLE IF NOT EXISTS progress (
 CREATE TABLE IF NOT EXISTS vocab (
     seq INTEGER PRIMARY KEY AUTOINCREMENT,
     id TEXT NOT NULL UNIQUE,
-    book_id TEXT REFERENCES books(id) ON DELETE CASCADE,
+    book_id TEXT,  -- no foreign key: 生词本 entries outlive their book
     created_at REAL NOT NULL,
     data TEXT NOT NULL
 );
+"""
+
+# Before: vocab.book_id cascaded, so deleting a book wiped its 生词. Rebuilt once, rows kept.
+_VOCAB_MIGRATION = """
+CREATE TABLE vocab_new (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT NOT NULL UNIQUE,
+    book_id TEXT,  -- no foreign key: 生词本 entries outlive their book
+    created_at REAL NOT NULL,
+    data TEXT NOT NULL
+);
+INSERT INTO vocab_new (seq, id, book_id, created_at, data) SELECT seq, id, book_id, created_at, data FROM vocab;
+DROP TABLE vocab;
+ALTER TABLE vocab_new RENAME TO vocab;
 """
 
 
@@ -58,6 +72,9 @@ class Store:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as c:
             c.executescript(SCHEMA)
+            sql = c.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='vocab'").fetchone()[0]
+            if "REFERENCES" in sql:
+                c.executescript("BEGIN;" + _VOCAB_MIGRATION + "COMMIT;")
 
     @contextmanager
     def _conn(self):
@@ -166,6 +183,11 @@ class Store:
                 "voice=COALESCE(?, voice) WHERE book_id=? AND idx=?",
                 (status, duration, voice, book_id, idx),
             )
+
+    def clear_audio(self, book_id):
+        """Every chapter back to 未准备 (its audio files are gone)."""
+        with self._conn() as c:
+            c.execute("UPDATE chapters SET status='none', duration=NULL, voice=NULL WHERE book_id=?", (book_id,))
 
     def set_chapter_matter(self, book_id, idx, is_matter):
         with self._conn() as c:

@@ -204,6 +204,10 @@ a { color: inherit; }
 .prep-row .bar { height: 5px; border-radius: 5px; background: var(--line); overflow: hidden; }
 .prep-row .bar i { display: block; height: 100%; width: 0; border-radius: 5px; background: var(--accent); transition: width .5s ease; }
 .prep-row .v { text-align: right; font-variant-numeric: tabular-nums; }
+.prep-est { margin-top: 10px; color: var(--muted); font-size: 12.5px; }
+.prep-est:empty { display: none; }
+.prep-eta { font-size: 12.5px; color: var(--muted); }
+.prep-eta:empty { display: none; }
 
 .chapters {
   margin-top: 30px; background: var(--card); border: 1px solid var(--line); border-radius: 12px;
@@ -542,3 +546,26 @@ body.drilling #text w.on { background: none; text-decoration: underline 2px; tex
   height: 28px; padding: 0 8px; border: 1px solid var(--btn-line); border-radius: 8px;
   background: var(--btn); color: var(--fg); font: 13px var(--ui);
 }
+
+/* ---- 书架: disk use + 删除 dialog ---- */
+.storage { color: var(--muted); font: 12.5px/1 var(--ui); white-space: nowrap; }
+.del-dlg {
+  width: min(420px, calc(100vw - 32px)); padding: 22px 22px 16px; border: 1px solid var(--line); border-radius: 14px;
+  background: var(--bg); color: var(--fg); font-family: var(--ui); box-shadow: 0 20px 60px rgba(30, 20, 10, .25);
+}
+.del-dlg::backdrop { background: rgba(20, 14, 8, .35); backdrop-filter: blur(2px); }
+.del-title { margin: 0 0 4px; font: 600 18px/1.35 var(--serif); }
+.del-use { margin: 0 0 14px; min-height: 1.4em; color: var(--muted); font-size: 13px; }
+.del-opts { display: grid; gap: 8px; }
+.del-opt {
+  display: grid; gap: 3px; text-align: left; padding: 11px 14px; border-radius: 10px; cursor: pointer;
+  border: 1px solid var(--btn-line); background: var(--btn); color: var(--fg); font: inherit;
+}
+.del-opt[hidden] { display: none; }
+.del-opt b { font-size: 14px; font-weight: 600; }
+.del-opt span { font-size: 12.5px; color: var(--muted); }
+.del-opt:hover { background: var(--btn-hover); }
+.del-opt.danger b { color: #c0392b; }
+.del-opt.danger:hover { border-color: color-mix(in srgb, #c0392b 45%, transparent); }
+.del-keep { margin: 12px 0 0; font-size: 12.5px; color: var(--muted); }
+.del-foot { display: flex; justify-content: flex-end; margin-top: 12px; }

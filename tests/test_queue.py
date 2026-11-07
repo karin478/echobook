@@ -498,3 +498,17 @@ def test_deleting_the_book_cancels_its_synthesis(env):
     q.enqueue(bid, [0], "high")
     q.run_once()
     assert calls == [1] and not lib.book_dir(bid).exists()
+
+
+def test_each_conversion_is_timed_for_the_estimates(env):
+    """预计时间 learns from real runs: chars, seconds of work and seconds of audio per chapter."""
+    from kokoro_reader.estimate import SpeedLog
+    store, lib, bid = env
+    ticks = iter([100.0, 130.0])
+    speed = SpeedLog(lib.home / "speed.json")
+    q = ConversionQueue(store, lib, FakeSynth(), autostart=False, speed=speed, clock=lambda: next(ticks))
+    q.enqueue(bid, [0], "normal")
+    assert q.run_once()
+    ch = store.list_chapters(bid)[0]
+    (run,) = json.loads((lib.home / "speed.json").read_text())
+    assert run == {"chars": ch["chars"], "seconds": 30.0, "audio": pytest.approx(ch["duration"])}

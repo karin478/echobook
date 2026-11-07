@@ -89,6 +89,7 @@ async function load() {
   }
   render();
   loadReadProgress();
+  loadStorage();
 }
 
 function sameOrder(ids) {
@@ -247,16 +248,57 @@ grid.addEventListener("click", async (e) => {
   e.preventDefault();
   const card = del.closest(".book-card");
   const book = state.books.find((b) => b.id === card.dataset.id);
-  if (!book) return;
-  if (!confirm(`确定要删除《${book.title}》吗？\n已生成的音频、中文、阅读进度和这本书的生词都会一起删除。`)) return;
+  if (book) openDelete(book);
+});
+
+/* 删除: only the audio, or the whole book — the 生词本 stays either way */
+const delDlg = document.getElementById("del-dlg");
+let delBook = null;
+
+async function openDelete(book) {
+  delBook = book;
+  delDlg.setAttribute("aria-label", `删除《${book.title}》`);
+  delDlg.querySelector(".del-title").textContent = `删除《${book.title}》`;
+  const use = delDlg.querySelector(".del-use");
+  const audioBtn = delDlg.querySelector('[data-del="audio"]');
+  use.textContent = "";
+  audioBtn.hidden = true;
+  delDlg.showModal();
   try {
-    await api.del(`/api/books/${book.id}`);
-    toast(`已删除《${book.title}》`);
+    const u = (await api.get("/api/storage")).books[book.id];
+    if (delBook !== book || !u) return;
+    use.textContent = u.audio ? `音频 ${fmtBytes(u.audio)} · 文字和中文 ${fmtBytes(u.other)}` : `文字和中文 ${fmtBytes(u.other)}（还没有生成音频）`;
+    audioBtn.hidden = !u.audio;
+  } catch (e) { /* sizes are a nicety; deleting still works */ }
+}
+
+delDlg.addEventListener("click", async (e) => {
+  const what = e.target === delDlg ? "cancel" : e.target.closest("[data-del]")?.dataset.del; // backdrop = cancel
+  if (!what) return;
+  const book = delBook;
+  delDlg.close();
+  if (what === "cancel" || !book) return;
+  try {
+    if (what === "audio") {
+      await api.del(`/api/books/${book.id}/audio`);
+      toast(`已删除音频：《${book.title}》（文字和中文还在）`);
+    } else {
+      await api.del(`/api/books/${book.id}`);
+      toast(`已删除《${book.title}》`);
+    }
   } catch (err) {
     toast(err.message, "error");
   }
   load();
 });
+
+async function loadStorage() {
+  try {
+    const s = await api.get("/api/storage");
+    const el = document.getElementById("storage");
+    el.textContent = `占用 ${fmtBytes(s.total)}`;
+  } catch (e) { /* not shown */ }
+}
 
 /* ---------- go ---------- */
 document.addEventListener("visibilitychange", () => { if (!document.hidden) loadReadProgress(); });

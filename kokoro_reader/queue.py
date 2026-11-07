@@ -8,9 +8,11 @@ import logging
 import os
 import sys
 import threading
+import time
 from typing import Literal
 
 from .audio import write_mp3
+from .estimate import SpeedLog
 from .library import Library
 from .store import Store
 from .tts import Synthesizer
@@ -54,10 +56,13 @@ def lower_worker_priority() -> None:
 
 
 class ConversionQueue:
-    def __init__(self, store: Store, library: Library, synth: Synthesizer, autostart: bool = True):
+    def __init__(self, store: Store, library: Library, synth: Synthesizer, autostart: bool = True,
+                 speed: SpeedLog | None = None, clock=time.monotonic):
         self.store = store
         self.library = library
         self.synth = synth
+        self.speed = speed      # each finished chapter is timed for the 预计时间
+        self.clock = clock
         self._cond = threading.Condition()
         self._pending: list[Item] = []
         self._current: dict | None = None
@@ -162,6 +167,7 @@ class ConversionQueue:
                 return
             voice = book["voice"]
             self.store.set_chapter_status(book_id, idx, "converting")
+            started = self.clock()
             paragraphs = self.library.paragraphs(book_id, idx)
             samples, tokens = self.synth.synth_chapter(paragraphs, voice, self._on_progress)
             if self.store.get_book(book_id) is None:  # deleted mid-conversion: write nothing
@@ -181,6 +187,12 @@ class ConversionQueue:
             tmp_js.write_text(json.dumps(tokens, ensure_ascii=False), encoding="utf-8")
             os.replace(tmp_js, js)
             self.store.set_chapter_status(book_id, idx, "done", duration=duration, voice=voice)
+            if self.speed is not None:
+                try:
+                    chars = next((c["chars"] for c in self.store.list_chapters(book_id) if c["idx"] == idx), 0)
+                    self.speed.record(chars, self.clock() - started, duration)
+                except OSError:
+                    log.warning("could not record conversion speed", exc_info=True)
         except Cancelled:
             log.info("conversion cancelled: book=%s chapter=%s", book_id, idx)
             self._drop_tmp(book_id, idx)

@@ -229,3 +229,20 @@ def test_ffmpeg_is_found_off_homebrew_too(tmp_path, monkeypatch):
     monkeypatch.setattr(audio, "HOMEBREW_FFMPEG", fake)
     monkeypatch.delenv("KOKORO_READER_FFMPEG")
     assert audio.ffmpeg_path() == str(fake)
+
+
+def _bitrate(p):
+    import subprocess
+    out = subprocess.run([audio.ffmpeg_path().replace("ffmpeg", "ffprobe"), "-v", "error", "-show_entries",
+                          "format=bit_rate", "-of", "csv=p=0", str(p)], capture_output=True, text=True, check=True)
+    return int(out.stdout.strip())
+
+
+def test_speech_is_stored_at_48k_mono(tmp_path):
+    """Kokoro speaks 24 kHz mono: 48 kbps sounds the same as 96 and is half the disk (~22 MB/hour)."""
+    t = np.arange(5 * SAMPLE_RATE) / SAMPLE_RATE
+    src = tmp_path / "s.mp3"
+    audio.write_mp3((0.3 * np.sin(2 * np.pi * 440 * t)).astype(np.float32), src)
+    audio.cut_clip(src, 1.0, 4.0, tmp_path / "c.mp3")
+    for p in (src, tmp_path / "c.mp3"):
+        assert 44_000 <= _bitrate(p) <= 52_000
